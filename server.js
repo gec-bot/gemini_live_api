@@ -1,0 +1,73 @@
+// server.js
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import fetch from 'node-fetch';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// 静的ファイルの提供
+app.use(express.static(path.join(__dirname, 'public')));
+
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+
+if (!GOOGLE_API_KEY) {
+  console.error('Error: GOOGLE_API_KEY is not set in environment variables');
+  process.exit(1);
+}
+
+// (1) APIキー提供（簡易版 - 開発・テスト用）
+// 注意: 本番環境ではephemeralトークンを使用すべきですが、
+// 現在ephemeralトークンAPIが動作しないため、直接APIキーを使用します
+app.post('/api-key', async (req, res) => {
+  try {
+    console.log('Providing API key for direct connection...');
+    res.json({ apiKey: GOOGLE_API_KEY });
+  } catch (e) {
+    console.error('API key error:', e);
+    res.status(500).json({ error: e?.message ?? 'failed to get API key' });
+  }
+});
+
+// (2) テキスト生成の安全プロキシ（要約/用語チェック用）
+app.post('/text-generate', async (req, res) => {
+  try {
+    const { systemInstruction, userQuery, model = 'gemini-2.0-flash-live-001' } = req.body;
+    const payload = {
+      contents: [{ parts: [{ text: userQuery }] }],
+      systemInstruction: { parts: [{ text: systemInstruction }] },
+    };
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GOOGLE_API_KEY}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
+    );
+    if (!r.ok) {
+      const t = await r.text();
+      return res.status(r.status).json({ error: t.slice(0, 200) });
+    }
+    const data = await r.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    res.json({ text });
+  } catch (e) {
+    console.error('Text generation error:', e);
+    res.status(500).json({ error: e?.message ?? 'proxy error' });
+  }
+});
+
+// ルートアクセスでindex.htmlを返す
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Access at: http://localhost:${PORT}`);
+});

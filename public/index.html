@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gemini Live リアルタイム文字起こし</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; margin: 24px; }
+    .container { max-width: 920px; margin: 0 auto; }
+    h1 { font-size: 22px; margin-bottom: 8px; }
+    .status-message { padding: 10px 12px; border-radius: 8px; background: #f4f6f8; margin: 12px 0; }
+    .status-message.success { background: #eef9f0; }
+    .status-message.error { background: #ffecec; color: #c62828; }
+    textarea { width: 100%; box-sizing: border-box; padding: 10px; height: 260px; }
+    .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .btn { padding: 8px 14px; border: 1px solid #ddd; border-radius: 8px; background: white; cursor: pointer; }
+    .btn[disabled] { opacity: .5; cursor: not-allowed; }
+    .btn.primary { background: #1967d2; color: white; border-color: #1967d2; }
+    .btn.danger { background: #c62828; color: white; border-color: #c62828; }
+    .hint { color: #666; font-size: 13px; }
+    .llm-area { margin-top: 24px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #fafafa; padding: 12px; border-radius: 8px; border: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Gemini Live リアルタイム文字起こし</h1>
+
+    <div id="status" class="status-message">ステータス: 準備完了。「文字起こし開始」ボタンをクリックしてください。</div>
+
+    <div class="controls" style="margin-bottom: 12px;">
+      <button id="start" class="btn primary">🎤 文字起こし開始</button>
+      <button id="stop" class="btn danger" disabled>⏹ 停止</button>
+      <span class="hint">※ ブラウザがマイクへのアクセスを求めます</span>
+    </div>
+
+    <textarea id="transcript" placeholder="ここにリアルタイムで文字起こしが表示されます..."></textarea>
+
+    <div class="llm-area">
+      <div class="controls">
+        <button id="summarize" class="btn" disabled>✨ 要約を生成</button>
+        <button id="terms" class="btn" disabled>✨ 専門用語をチェック</button>
+        <span class="hint">（停止後に実行できます）</span>
+      </div>
+      <div id="llmOut" style="margin-top: 10px;"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    // ===== 設定 =====
+    const GEMINI_LIVE_ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
+    const API_KEY_ENDPOINT = '/api-key';                // APIキーサーバ
+    const TEXT_GEN_ENDPOINT = '/text-generate';         // テキスト生成プロキシ
+    const SAMPLE_RATE = 16000;
+    const CHUNK_SIZE = 2048; // ScriptProcessor のバッファ
+
+    // ===== DOM =====
+    const $status = document.getElementById('status');
+    const $start = document.getElementById('start');
+    const $stop = document.getElementById('stop');
+    const $txt = document.getElementById('transcript');
+    const $sum = document.getElementById('summarize');
+    const $terms = document.getElementById('terms');
+    const $out = document.getElementById('llmOut');
+
+    // ===== 状態 =====
+    let ws = null;            // WebSocket 接続
+    let audioContext = null;  // WebAudio
+    let micStream = null;     // マイク
+    let sysStream = null;     // システム音声（画面共有）
+    let recorder = null;      // ScriptProcessorNode
+
+    function setStatus(msg, type='') {
+      $status.textContent = `ステータス: ${msg}`;
+      $status.className = `status-message ${type}`.trim();
+    }
+    function updateButtons(running) {
+      $start.disabled = running;
+      $stop.disabled = !running;
+      const hasText = ($txt.value.trim().length > 0);
+      $sum.disabled = running || !hasText;
+      $terms.disabled = running || !hasText;
+    }
+
+    async function fetchApiKey() {
+      const res = await fetch(API_KEY_ENDPOINT, { method: 'POST' });
+      if (!res.ok) throw new Error(`APIキー取得に失敗: ${res.status}`);
+      const { apiKey } = await res.json();
+      if (!apiKey) throw new Error('APIキーレスポンスが不正');
+      return apiKey;
+    }
+
+async function startTranscription() {
+  setStatus('音声ストリーム取得中...');
+  updateButtons(true);
+  $out.innerHTML = '';
+  $txt.value = '';
+
+  try {
+    // 1) マイク取得
+    const micOnly = true;
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    setStatus('マイク取得完了。接続準備中...');
+
+    // 2) WebAudio 準備（16kHz）
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+    const micSrc = audioContext.createMediaStreamSource(micStream);
+
+    let merger = null;
+    if (!micOnly) {
+      // システム音声も取りたい場合
+      try {
+        sysStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: { systemAudio: "include", suppressLocalAudioPlayback: false }
+        });
+        sysStream.getVideoTracks().forEach(t => t.stop());
+      } catch (e) {
+        console.warn('displayMedia unavailable, continue with mic only', e);
+        sysStream = null;
+      }
+    }
+
+    // 入力チャンネルを安全に 1ch にまとめる
+    const inChannels = (micOnly || !sysStream) ? 1 : 2;
+    merger = audioContext.createChannelMerger(inChannels);
+    micSrc.connect(merger, 0, 0);
+
+    if (!micOnly && sysStream) {
+      const sysTracks = sysStream.getAudioTracks();
+      if (sysTracks.length > 0) {
+        const sysSrc = audioContext.createMediaStreamSource(sysStream);
+        sysSrc.connect(merger, 0, 1);
+        setStatus('マイク + システム音声（可能なら）を送信します...');
+      } else {
+        setStatus('システム音声トラックが見つからず、マイクのみで続行します。');
+      }
+    }
+
+    // ScriptProcessor は環境差で NotSupported になりうるので try で保護
+    try {
+      recorder = audioContext.createScriptProcessor(CHUNK_SIZE, inChannels, 1);
+    } catch (e) {
+      recorder = audioContext.createScriptProcessor(2048, inChannels, 1);
+    }
+    merger.connect(recorder);
+    recorder.connect(audioContext.destination);
+
+    // 3) APIキーで Live API 接続
+    const apiKey = await fetchApiKey();
+    const url = `${GEMINI_LIVE_ENDPOINT}?key=${encodeURIComponent(apiKey)}`;
+    ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+
+    ws.onopen = async () => {
+      setStatus('Gemini Live に接続しました。セットアップ中...', 'success');
+      try { await audioContext.resume(); } catch {}
+
+      // 正しいフォーマットでセットアップメッセージを送信
+      const init = {
+        setup: {
+          model: 'models/gemini-2.0-flash-live-001',
+          generationConfig: {
+            responseModalities: ['TEXT'],
+          },
+          systemInstruction: {
+            parts: [{
+              text: 'あなたはユーザーの音声入力を厳密に文字起こしするエンジンです。句読点含め正確な日本語で書き起こしてください。応答や要約はしないでください。'
+            }]
+          }
+        }
+      };
+      console.log('Sending setup:', JSON.stringify(init, null, 2));
+      ws.send(JSON.stringify(init));
+    };
+
+    let setupComplete = false;
+
+    ws.onmessage = (ev) => {
+      // ArrayBufferをテキストにデコード
+      let messageText;
+      if (ev.data instanceof ArrayBuffer) {
+        const decoder = new TextDecoder('utf-8');
+        messageText = decoder.decode(ev.data);
+      } else {
+        messageText = ev.data;
+      }
+
+      // JSONメッセージの処理
+      try {
+        const data = JSON.parse(messageText);
+        console.log('Received message:', JSON.stringify(data, null, 2));
+
+        // エラーメッセージのチェック
+        if (data.error) {
+          console.error('Server error:', data.error);
+          setStatus(`サーバーエラー: ${JSON.stringify(data.error)}`, 'error');
+        }
+
+        // セットアップ完了メッセージを待つ
+        if (data.setupComplete) {
+          console.log('Setup complete, starting audio transmission...');
+          setupComplete = true;
+          setStatus('セットアップ完了。文字起こしを開始します。', 'success');
+
+          // セットアップ完了後、音声送信を開始
+          let audioChunkCount = 0;
+          recorder.onaudioprocess = (e) => {
+            if (!ws || ws.readyState !== WebSocket.OPEN || !setupComplete) return;
+
+            const nCh = e.inputBuffer.numberOfChannels;
+            const ch0 = nCh > 0 ? e.inputBuffer.getChannelData(0) : new Float32Array(0);
+            const ch1 = nCh > 1 ? e.inputBuffer.getChannelData(1) : null;
+
+            const len = ch0.length;
+            const pcm16 = new Int16Array(len);
+            for (let i = 0; i < len; i++) {
+              const r = ch1 ? ch1[i] : 0;
+              const mixed = ((ch0[i] || 0) + (r || 0)) / (ch1 ? 2 : 1);
+              const s = Math.max(-1, Math.min(1, mixed));
+              pcm16[i] = (s * 0x7fff) | 0;
+            }
+
+            // realtimeInputメッセージとして音声を送信（正しいフォーマット）
+            const uint8Array = new Uint8Array(pcm16.buffer);
+            let binary = '';
+            for (let i = 0; i < uint8Array.byteLength; i++) {
+              binary += String.fromCharCode(uint8Array[i]);
+            }
+            const base64Audio = btoa(binary);
+
+            const audioMsg = {
+              realtimeInput: {
+                audio: {
+                  mimeType: 'audio/pcm;rate=16000',
+                  data: base64Audio
+                }
+              }
+            };
+            ws.send(JSON.stringify(audioMsg));
+
+            // 最初の数チャンクだけログ出力
+            if (audioChunkCount < 3) {
+              console.log(`Sending audio chunk #${audioChunkCount}, size: ${pcm16.buffer.byteLength} bytes`);
+              if (audioChunkCount === 0) {
+                console.log('Sample audio message:', audioMsg);
+              }
+              audioChunkCount++;
+            }
+          };
+        }
+
+        // サーバーからのコンテンツ（文字起こし結果）を処理
+        if (data.serverContent) {
+          console.log('serverContent received:', data.serverContent);
+
+          // modelTurn.parts[0].text から取得
+          const text = data.serverContent.modelTurn?.parts?.[0]?.text;
+          if (text) {
+            console.log('Transcription text:', text);
+            $txt.value += text;
+            $txt.scrollTop = $txt.scrollHeight;
+          } else {
+            console.log('serverContent has no text in modelTurn.parts[0]');
+          }
+        }
+
+        // その他のメッセージタイプもログ出力
+        if (data.toolCall) {
+          console.log('toolCall received:', data.toolCall);
+        }
+        if (data.toolCallCancellation) {
+          console.log('toolCallCancellation received:', data.toolCallCancellation);
+        }
+      } catch (err) {
+        console.warn('Message parse error:', err, 'Data:', ev.data);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('WebSocket error', err);
+      setStatus('WebSocketエラー。コンソールを確認してください。', 'error');
+      stopTranscription();
+    };
+
+    ws.onclose = (ev) => {
+      console.warn("WS closed:", {code: ev.code, reason: ev.reason});
+      setStatus(`接続が切断されました（code=${ev.code} reason=${ev.reason || 'n/a'}）。再開できます。`);
+      updateButtons(false);
+    };
+  } catch (e) {
+    console.error('startTranscription error', e);
+    const msg = (e?.name === 'NotAllowedError' || e?.name === 'NotFoundError')
+      ? '権限エラー: マイクへのアクセス許可が必要です。ページを再読み込みして許可してください。'
+      : `初期化エラー: ${e?.message || e}`;
+    setStatus(msg, 'error');
+    updateButtons(false);
+  }
+}
+
+    function stopTranscription() {
+      setStatus('停止処理中...');
+      // WebSocket
+      try { ws?.close(1000, 'user close'); } catch(_){}
+      ws = null;
+      // Audio
+      try { recorder?.disconnect(); } catch(_){}
+      recorder = null;
+      try { audioContext?.close(); } catch(_){}
+      audioContext = null;
+      try { micStream?.getTracks().forEach(t => t.stop()); } catch(_){}
+      micStream = null;
+      try { sysStream?.getTracks().forEach(t => t.stop()); } catch(_){}
+      sysStream = null;
+
+      setStatus('停止完了。分析機能を使えます。');
+      updateButtons(false);
+    }
+
+    async function callTextGen(systemInstruction, userQuery, model = 'gemini-2.0-flash-live-001') {
+      const payload = { systemInstruction, userQuery, model };
+      const res = await fetch(TEXT_GEN_ENDPOINT, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(`テキスト生成に失敗: ${res.status}`);
+      const data = await res.json();
+      return data.text || '';
+    }
+
+    async function summarize() {
+      const t = $txt.value.trim();
+      if (!t) return;
+      $sum.disabled = $terms.disabled = true;
+      $out.innerHTML = '<pre>✨ 要約を生成中...</pre>';
+      try {
+        const sys = 'あなたはプロのサマライザーです。提供された日本語の会議または会話の文字起こしを読み、主要な論点、決定事項、次のステップを含む簡潔な箇条書きの要約を日本語で作成してください。';
+        const uq = `以下の文字起こしを要約してください:\n\n---\n${t}`;
+        const text = await callTextGen(sys, uq);
+        $out.innerHTML = `<h3>要約結果</h3><pre>${text}</pre>`;
+        setStatus('要約が完了しました。', 'success');
+      } catch (e) {
+        $out.innerHTML = `<pre style="color:#c62828">分析エラー: ${e?.message || e}</pre>`;
+        setStatus('要約に失敗しました。', 'error');
+      } finally {
+        updateButtons(false);
+      }
+    }
+
+    async function terms() {
+      const t = $txt.value.trim();
+      if (!t) return;
+      $sum.disabled = $terms.disabled = true;
+      $out.innerHTML = '<pre>✨ 専門用語を分析中...</pre>';
+      try {
+        const sys = 'あなたは学術的なアシスタントです。提供された日本語のテキストから、専門的/技術的な用語を最大5つ抽出し、非専門家にも分かる簡潔で正確な日本語の説明を出力してください。出力は「【用語】: 説明文」の箇条書き。';
+        const uq = `以下の文字起こしから専門用語を抽出し、説明してください:\n\n---\n${t}`;
+        const text = await callTextGen(sys, uq);
+        $out.innerHTML = `<h3>専門用語分析結果</h3><pre>${text}</pre>`;
+        setStatus('専門用語分析が完了しました。', 'success');
+      } catch (e) {
+        $out.innerHTML = `<pre style="color:#c62828">分析エラー: ${e?.message || e}</pre>`;
+        setStatus('専門用語分析に失敗しました。', 'error');
+      } finally {
+        updateButtons(false);
+      }
+    }
+
+    // ===== イベント =====
+    $start.addEventListener('click', startTranscription);
+    $stop.addEventListener('click', stopTranscription);
+    $sum.addEventListener('click', summarize);
+    $terms.addEventListener('click', terms);
+
+    // 初期
+    updateButtons(false);
+  </script>
+</body>
+</html>
