@@ -1,5 +1,15 @@
 // server.js
-import 'dotenv/config';
+// ローカル開発環境でのみdotenvを読み込む
+if (process.env.NODE_ENV !== 'production') {
+  try {
+    const dotenv = await import('dotenv');
+    dotenv.config();
+    console.log('Loaded .env file for local development');
+  } catch (error) {
+    console.log('dotenv not available or .env file not found, using environment variables');
+  }
+}
+
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
@@ -18,8 +28,14 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 
+console.log('Environment check:');
+console.log('- NODE_ENV:', process.env.NODE_ENV || 'not set');
+console.log('- GOOGLE_API_KEY:', GOOGLE_API_KEY ? 'SET (length: ' + GOOGLE_API_KEY.length + ')' : 'NOT SET');
+console.log('- All env vars:', Object.keys(process.env).filter(k => k.includes('GOOGLE')));
+
 if (!GOOGLE_API_KEY) {
   console.error('Error: GOOGLE_API_KEY is not set in environment variables');
+  console.error('Please set GOOGLE_API_KEY in Render dashboard under Environment tab');
   process.exit(1);
 }
 
