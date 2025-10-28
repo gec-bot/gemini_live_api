@@ -24,14 +24,35 @@
 </head>
 <body>
   <div class="container">
-    <h1>Gemini Live リアルタイム文字起こし</h1>
+    <h1>Gemini Live リアルタイム文字起こし（コールセンター対応）</h1>
 
     <div id="status" class="status-message">ステータス: 準備完了。「文字起こし開始」ボタンをクリックしてください。</div>
 
     <div class="controls" style="margin-bottom: 12px;">
       <button id="start" class="btn primary">🎤 文字起こし開始</button>
       <button id="stop" class="btn danger" disabled>⏹ 停止</button>
+      <label style="margin-left: 16px;">
+        <input type="checkbox" id="useSystemAudio" checked>
+        システム音声（コラボス）も含める
+      </label>
       <span class="hint">※ ブラウザがマイクへのアクセスを求めます</span>
+    </div>
+
+    <div id="audioDebug" style="margin: 12px 0; padding: 10px; background: #f0f0f0; border-radius: 8px; display: none;">
+      <div><strong>音声入力情報:</strong></div>
+      <div id="micInfo">マイク: 未接続</div>
+      <div id="sysInfo">システム音声: 未接続</div>
+      <div id="audioLevel" style="margin-top: 8px;">
+        <div style="font-size: 13px; color: #666; margin-bottom: 4px;">オペレーター（マイク）音量:</div>
+        <div style="height: 20px; background: #ddd; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+          <div id="micLevelBar" style="height: 100%; width: 0%; background: #1967d2; transition: width 0.1s;"></div>
+        </div>
+        <div style="font-size: 13px; color: #666; margin-bottom: 4px;">顧客（コラボス）音量:</div>
+        <div style="height: 20px; background: #ddd; border-radius: 4px; overflow: hidden;">
+          <div id="sysLevelBar" style="height: 100%; width: 0%; background: #e91e63; transition: width 0.1s;"></div>
+        </div>
+        <div id="currentSpeaker" style="margin-top: 8px; font-weight: bold; color: #1967d2;">現在の話者: --</div>
+      </div>
     </div>
 
     <textarea id="transcript" placeholder="ここにリアルタイムで文字起こしが表示されます..."></textarea>
@@ -40,9 +61,22 @@
       <div class="controls">
         <button id="summarize" class="btn" disabled>✨ 要約を生成</button>
         <button id="terms" class="btn" disabled>✨ 専門用語をチェック</button>
+        <button id="saveSession" class="btn" disabled>💾 保存</button>
+        <button id="viewHistory" class="btn">📋 履歴を表示</button>
         <span class="hint">（停止後に実行できます）</span>
       </div>
       <div id="llmOut" style="margin-top: 10px;"></div>
+    </div>
+
+    <!-- セッション履歴モーダル -->
+    <div id="historyModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+      <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 24px; border-radius: 12px; max-width: 800px; max-height: 80%; overflow-y: auto; width: 90%;">
+        <h2 style="margin-top: 0;">文字起こし履歴</h2>
+        <div id="historyList"></div>
+        <div style="margin-top: 16px; text-align: right;">
+          <button id="closeHistory" class="btn">閉じる</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -62,6 +96,18 @@
     const $sum = document.getElementById('summarize');
     const $terms = document.getElementById('terms');
     const $out = document.getElementById('llmOut');
+    const $useSystemAudio = document.getElementById('useSystemAudio');
+    const $audioDebug = document.getElementById('audioDebug');
+    const $micInfo = document.getElementById('micInfo');
+    const $sysInfo = document.getElementById('sysInfo');
+    const $micLevelBar = document.getElementById('micLevelBar');
+    const $sysLevelBar = document.getElementById('sysLevelBar');
+    const $currentSpeaker = document.getElementById('currentSpeaker');
+    const $saveSession = document.getElementById('saveSession');
+    const $viewHistory = document.getElementById('viewHistory');
+    const $historyModal = document.getElementById('historyModal');
+    const $historyList = document.getElementById('historyList');
+    const $closeHistory = document.getElementById('closeHistory');
 
     // ===== 状態 =====
     let ws = null;            // WebSocket 接続
@@ -69,6 +115,150 @@
     let micStream = null;     // マイク
     let sysStream = null;     // システム音声（画面共有）
     let recorder = null;      // ScriptProcessorNode
+    let currentSessionId = null; // 現在のセッションID
+    let autoSaveInterval = null; // 自動保存タイマー
+
+    // 話者判定
+    let currentSpeaker = null; // 'operator' | 'customer' | null
+    let micAnalyser = null;
+    let sysAnalyser = null;
+    let micDataArray = null;
+    let sysDataArray = null;
+    let levelMonitorInterval = null; // 音量モニタリング用のインターバル
+
+    // 音量レベルを計算（RMS値）
+    function calculateAudioLevel(analyser, dataArray) {
+      if (!analyser || !dataArray) return 0;
+      analyser.getByteTimeDomainData(dataArray);
+
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const normalized = (dataArray[i] - 128) / 128; // -1 to 1
+        sum += normalized * normalized;
+      }
+      const rms = Math.sqrt(sum / dataArray.length);
+      return rms;
+    }
+
+    // 音量レベルを監視して話者を判定
+    function monitorAudioLevels() {
+      const micLevel = calculateAudioLevel(micAnalyser, micDataArray);
+      const sysLevel = calculateAudioLevel(sysAnalyser, sysDataArray);
+
+      // UIの音量バーを更新（0-100%）
+      const micPercent = Math.min(100, micLevel * 200); // 倍率調整
+      const sysPercent = sysAnalyser && sysDataArray ? Math.min(100, sysLevel * 200) : 0;
+
+      $micLevelBar.style.width = micPercent + '%';
+      if (sysAnalyser) {
+        $sysLevelBar.style.width = sysPercent + '%';
+      }
+
+      // 話者判定（音量の大きい方、閾値0.05以上）
+      const threshold = 0.05;
+      let newSpeaker = null;
+
+      if (micLevel > threshold || sysLevel > threshold) {
+        if (micLevel > sysLevel) {
+          newSpeaker = 'operator';
+        } else {
+          newSpeaker = 'customer';
+        }
+      }
+
+      // 話者が変わった場合のみ更新
+      if (newSpeaker !== currentSpeaker) {
+        currentSpeaker = newSpeaker;
+        if (currentSpeaker === 'operator') {
+          $currentSpeaker.textContent = '現在の話者: オペレーター（マイク）';
+          $currentSpeaker.style.color = '#1967d2';
+        } else if (currentSpeaker === 'customer') {
+          $currentSpeaker.textContent = '現在の話者: 顧客（コラボス）';
+          $currentSpeaker.style.color = '#e91e63';
+        } else {
+          $currentSpeaker.textContent = '現在の話者: --';
+          $currentSpeaker.style.color = '#666';
+        }
+      }
+    }
+
+    // 音量モニタリングを開始
+    function startLevelMonitoring() {
+      if (levelMonitorInterval) return;
+      levelMonitorInterval = setInterval(monitorAudioLevels, 100); // 100msごとに更新
+      console.log('Audio level monitoring started');
+    }
+
+    // 音量モニタリングを停止
+    function stopLevelMonitoring() {
+      if (levelMonitorInterval) {
+        clearInterval(levelMonitorInterval);
+        levelMonitorInterval = null;
+        currentSpeaker = null;
+        $currentSpeaker.textContent = '現在の話者: --';
+        $currentSpeaker.style.color = '#666';
+        $micLevelBar.style.width = '0%';
+        $sysLevelBar.style.width = '0%';
+        console.log('Audio level monitoring stopped');
+      }
+    }
+
+    // ===== セッション管理 =====
+    function createSession() {
+      currentSessionId = Date.now().toString();
+      const session = {
+        id: currentSessionId,
+        startTime: new Date().toISOString(),
+        transcript: '',
+        endTime: null
+      };
+      console.log('Created new session:', currentSessionId);
+      return session;
+    }
+
+    function saveCurrentSession() {
+      if (!currentSessionId) return;
+
+      const sessions = JSON.parse(localStorage.getItem('transcriptSessions') || '[]');
+      const existingIndex = sessions.findIndex(s => s.id === currentSessionId);
+
+      const session = {
+        id: currentSessionId,
+        startTime: existingIndex >= 0 ? sessions[existingIndex].startTime : new Date().toISOString(),
+        transcript: $txt.value,
+        endTime: new Date().toISOString(),
+        length: $txt.value.length
+      };
+
+      if (existingIndex >= 0) {
+        sessions[existingIndex] = session;
+      } else {
+        sessions.unshift(session);
+      }
+
+      // 最新50件のみ保存
+      const trimmedSessions = sessions.slice(0, 50);
+      localStorage.setItem('transcriptSessions', JSON.stringify(trimmedSessions));
+      console.log('Session saved:', currentSessionId);
+      setStatus('セッションを保存しました', 'success');
+    }
+
+    function startAutoSave() {
+      // 10秒ごとに自動保存
+      autoSaveInterval = setInterval(() => {
+        if ($txt.value.trim().length > 0) {
+          saveCurrentSession();
+          console.log('Auto-saved at', new Date().toLocaleTimeString());
+        }
+      }, 10000);
+    }
+
+    function stopAutoSave() {
+      if (autoSaveInterval) {
+        clearInterval(autoSaveInterval);
+        autoSaveInterval = null;
+      }
+    }
 
     function setStatus(msg, type='') {
       $status.textContent = `ステータス: ${msg}`;
@@ -80,6 +270,7 @@
       const hasText = ($txt.value.trim().length > 0);
       $sum.disabled = running || !hasText;
       $terms.disabled = running || !hasText;
+      $saveSession.disabled = running || !hasText;
     }
 
     async function fetchApiKey() {
@@ -96,27 +287,61 @@ async function startTranscription() {
   $out.innerHTML = '';
   $txt.value = '';
 
+  // 新しいセッションを作成
+  createSession();
+  startAutoSave();
+  console.log('Auto-save enabled: 別タブで作業中でも10秒ごとに自動保存されます');
+
   try {
+    // デバッグ情報を表示
+    $audioDebug.style.display = 'block';
+
     // 1) マイク取得
-    const micOnly = true;
+    const micOnly = !$useSystemAudio.checked; // チェックボックスで制御
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    setStatus('マイク取得完了。接続準備中...');
+
+    // マイク情報を表示
+    const micTrack = micStream.getAudioTracks()[0];
+    $micInfo.textContent = `マイク: ${micTrack.label || '接続済み'} (デバイスID: ${micTrack.id.substring(0, 8)}...)`;
+    console.log('Microphone track:', micTrack);
+
+    if (micOnly) {
+      setStatus('マイクのみで接続準備中...');
+      $sysInfo.textContent = 'システム音声: 使用しない';
+    } else {
+      setStatus('マイク取得完了。次に画面共有（システム音声）を選択してください...');
+    }
 
     // 2) WebAudio 準備（16kHz）
     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
     const micSrc = audioContext.createMediaStreamSource(micStream);
 
+    // マイク用のAnalyserNodeを作成
+    micAnalyser = audioContext.createAnalyser();
+    micAnalyser.fftSize = 256;
+    micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
+    micSrc.connect(micAnalyser);
+
     let merger = null;
     if (!micOnly) {
-      // システム音声も取りたい場合
+      // システム音声（コラボスなど）をキャプチャ
       try {
+        // Chromeの画面共有ダイアログで「システムオーディオを共有」にチェックを入れてください
         sysStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: { systemAudio: "include", suppressLocalAudioPlayback: false }
+          video: true, // 画面選択のため必要（映像は使わない）
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            suppressLocalAudioPlayback: false
+          }
         });
+        // 映像トラックは不要なので停止
         sysStream.getVideoTracks().forEach(t => t.stop());
+        console.log('System audio tracks:', sysStream.getAudioTracks().length);
       } catch (e) {
-        console.warn('displayMedia unavailable, continue with mic only', e);
+        console.warn('画面共有がキャンセルされました。マイクのみで続行します。', e);
+        setStatus('画面共有がキャンセルされました。マイクのみで続行します。');
         sysStream = null;
       }
     }
@@ -128,12 +353,34 @@ async function startTranscription() {
 
     if (!micOnly && sysStream) {
       const sysTracks = sysStream.getAudioTracks();
+      const videoTracks = sysStream.getVideoTracks();
+
+      // 共有しているソースの情報を表示
+      if (videoTracks.length > 0) {
+        console.log('Shared source:', videoTracks[0].label);
+      }
+
       if (sysTracks.length > 0) {
+        const sysTrack = sysTracks[0];
+        $sysInfo.textContent = `システム音声: ${sysTrack.label || '接続済み'} (ソース: ${videoTracks[0]?.label || '不明'})`;
+        console.log('System audio track:', sysTrack);
+        console.log('Video track (shared source):', videoTracks[0]);
+
         const sysSrc = audioContext.createMediaStreamSource(sysStream);
+
+        // システム音声用のAnalyserNodeを作成
+        sysAnalyser = audioContext.createAnalyser();
+        sysAnalyser.fftSize = 256;
+        sysDataArray = new Uint8Array(sysAnalyser.frequencyBinCount);
+        sysSrc.connect(sysAnalyser);
+
         sysSrc.connect(merger, 0, 1);
-        setStatus('マイク + システム音声（可能なら）を送信します...');
+        setStatus('マイク + システム音声（コラボス音声）を送信します。接続準備中...');
+        console.log('System audio enabled: マイクとシステム音声の両方をキャプチャします');
       } else {
         setStatus('システム音声トラックが見つからず、マイクのみで続行します。');
+        $sysInfo.textContent = 'システム音声: 取得できませんでした（「システムオーディオを共有」にチェックを入れてください）';
+        console.warn('画面共有時に「システムオーディオを共有」にチェックを入れてください');
       }
     }
 
@@ -203,6 +450,9 @@ async function startTranscription() {
           setupComplete = true;
           setStatus('セットアップ完了。文字起こしを開始します。', 'success');
 
+          // 音量レベル監視を開始
+          startLevelMonitoring();
+
           // セットアップ完了後、音声送信を開始
           let audioChunkCount = 0;
           recorder.onaudioprocess = (e) => {
@@ -258,7 +508,16 @@ async function startTranscription() {
           const text = data.serverContent.modelTurn?.parts?.[0]?.text;
           if (text) {
             console.log('Transcription text:', text);
-            $txt.value += text;
+
+            // 話者ラベルを付加
+            let speakerLabel = '';
+            if (currentSpeaker === 'operator') {
+              speakerLabel = '[オペレーター] ';
+            } else if (currentSpeaker === 'customer') {
+              speakerLabel = '[顧客] ';
+            }
+
+            $txt.value += speakerLabel + text;
             $txt.scrollTop = $txt.scrollHeight;
           } else {
             console.log('serverContent has no text in modelTurn.parts[0]');
@@ -300,6 +559,16 @@ async function startTranscription() {
 
     function stopTranscription() {
       setStatus('停止処理中...');
+
+      // 自動保存を停止して最終保存
+      stopAutoSave();
+      if ($txt.value.trim().length > 0) {
+        saveCurrentSession();
+      }
+
+      // 音量モニタリングを停止
+      stopLevelMonitoring();
+
       // WebSocket
       try { ws?.close(1000, 'user close'); } catch(_){}
       ws = null;
@@ -313,7 +582,18 @@ async function startTranscription() {
       try { sysStream?.getTracks().forEach(t => t.stop()); } catch(_){}
       sysStream = null;
 
-      setStatus('停止完了。分析機能を使えます。');
+      // AnalyserNodeをクリア
+      micAnalyser = null;
+      sysAnalyser = null;
+      micDataArray = null;
+      sysDataArray = null;
+
+      // デバッグ情報を非表示
+      $audioDebug.style.display = 'none';
+      $micInfo.textContent = 'マイク: 未接続';
+      $sysInfo.textContent = 'システム音声: 未接続';
+
+      setStatus('停止完了。文字起こし結果を自動保存しました。分析機能を使えます。', 'success');
       updateButtons(false);
     }
 
@@ -365,11 +645,89 @@ async function startTranscription() {
       }
     }
 
+    // ===== 履歴表示 =====
+    function showHistory() {
+      const sessions = JSON.parse(localStorage.getItem('transcriptSessions') || '[]');
+
+      if (sessions.length === 0) {
+        $historyList.innerHTML = '<p style="color: #666;">保存されたセッションはありません。</p>';
+      } else {
+        let html = '<div style="display: flex; flex-direction: column; gap: 12px;">';
+        sessions.forEach((session, index) => {
+          const startDate = new Date(session.startTime);
+          const endDate = session.endTime ? new Date(session.endTime) : null;
+          const duration = endDate ? Math.round((endDate - startDate) / 1000) : null;
+
+          html += `
+            <div style="border: 1px solid #ddd; padding: 12px; border-radius: 8px; background: #fafafa;">
+              <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                <div>
+                  <strong>セッション ${index + 1}</strong>
+                  <div style="font-size: 13px; color: #666;">
+                    ${startDate.toLocaleString('ja-JP')}
+                    ${duration ? `(${duration}秒)` : ''}
+                  </div>
+                </div>
+                <div>
+                  <button class="btn" style="font-size: 12px; padding: 4px 8px;" onclick="loadSession('${session.id}')">読み込み</button>
+                  <button class="btn" style="font-size: 12px; padding: 4px 8px;" onclick="deleteSession('${session.id}')">削除</button>
+                </div>
+              </div>
+              <div style="font-size: 13px; color: #666; margin-bottom: 4px;">
+                文字数: ${session.length || session.transcript.length}文字
+              </div>
+              <div style="max-height: 100px; overflow-y: auto; background: white; padding: 8px; border-radius: 4px; font-size: 13px;">
+                ${session.transcript.substring(0, 200)}${session.transcript.length > 200 ? '...' : ''}
+              </div>
+            </div>
+          `;
+        });
+        html += '</div>';
+        $historyList.innerHTML = html;
+      }
+
+      $historyModal.style.display = 'block';
+    }
+
+    function hideHistory() {
+      $historyModal.style.display = 'none';
+    }
+
+    // グローバルスコープに公開（onclick属性で使用）
+    window.loadSession = function(sessionId) {
+      const sessions = JSON.parse(localStorage.getItem('transcriptSessions') || '[]');
+      const session = sessions.find(s => s.id === sessionId);
+      if (session) {
+        $txt.value = session.transcript;
+        updateButtons(false);
+        hideHistory();
+        setStatus('セッションを読み込みました', 'success');
+      }
+    };
+
+    window.deleteSession = function(sessionId) {
+      if (!confirm('このセッションを削除しますか？')) return;
+
+      const sessions = JSON.parse(localStorage.getItem('transcriptSessions') || '[]');
+      const filtered = sessions.filter(s => s.id !== sessionId);
+      localStorage.setItem('transcriptSessions', JSON.stringify(filtered));
+      showHistory(); // 再表示
+      setStatus('セッションを削除しました', 'success');
+    };
+
     // ===== イベント =====
     $start.addEventListener('click', startTranscription);
     $stop.addEventListener('click', stopTranscription);
     $sum.addEventListener('click', summarize);
     $terms.addEventListener('click', terms);
+    $saveSession.addEventListener('click', saveCurrentSession);
+    $viewHistory.addEventListener('click', showHistory);
+    $closeHistory.addEventListener('click', hideHistory);
+
+    // モーダルの背景クリックで閉じる
+    $historyModal.addEventListener('click', (e) => {
+      if (e.target === $historyModal) hideHistory();
+    });
 
     // 初期
     updateButtons(false);
