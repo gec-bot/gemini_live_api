@@ -597,7 +597,7 @@ async function startTranscription() {
       updateButtons(false);
     }
 
-    async function callTextGen(systemInstruction, userQuery, model = 'gemini-1.5-flash') {
+    async function callTextGen(systemInstruction, userQuery, model = 'gemini-pro') {
       const payload = { systemInstruction, userQuery, model };
       console.log('Calling text generation API:', TEXT_GEN_ENDPOINT);
       console.log('Payload:', payload);
