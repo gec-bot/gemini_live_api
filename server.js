@@ -73,7 +73,7 @@ app.get('/list-models', async (req, res) => {
 // (2) テキスト生成の安全プロキシ（要約/用語チェック用）
 app.post('/text-generate', async (req, res) => {
   try {
-    const { systemInstruction, userQuery, model = 'gemini-pro' } = req.body;
+    const { systemInstruction, userQuery, model = 'gemini-2.0-flash-exp' } = req.body;
 
     console.log('=== Text Generation Request ===');
     console.log('Model:', model);
