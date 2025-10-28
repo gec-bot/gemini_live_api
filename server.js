@@ -74,19 +74,36 @@ app.get('/list-models', async (req, res) => {
 app.post('/text-generate', async (req, res) => {
   try {
     const { systemInstruction, userQuery, model = 'models/gemini-pro' } = req.body;
+
+    console.log('=== Text Generation Request ===');
+    console.log('Model:', model);
+    console.log('System Instruction:', systemInstruction?.substring(0, 100));
+    console.log('User Query length:', userQuery?.length);
+
     const payload = {
       contents: [{ parts: [{ text: userQuery }] }],
       systemInstruction: { parts: [{ text: systemInstruction }] },
     };
-    const r = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GOOGLE_API_KEY}`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
-    );
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GOOGLE_API_KEY}`;
+    console.log('Request URL:', url.replace(GOOGLE_API_KEY, 'API_KEY_HIDDEN'));
+
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    console.log('Response status:', r.status);
+
     if (!r.ok) {
       const t = await r.text();
-      return res.status(r.status).json({ error: t.slice(0, 200) });
+      console.error('Error response:', t);
+      return res.status(r.status).json({ error: t });
     }
+
     const data = await r.json();
+    console.log('Response received, candidates:', data.candidates?.length);
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
     res.json({ text });
   } catch (e) {
