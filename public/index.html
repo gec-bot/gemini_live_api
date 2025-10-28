@@ -597,30 +597,55 @@ async function startTranscription() {
       updateButtons(false);
     }
 
-    async function callTextGen(systemInstruction, userQuery, model = 'gemini-2.0-flash-live-001') {
+    async function callTextGen(systemInstruction, userQuery, model = 'gemini-1.5-flash') {
       const payload = { systemInstruction, userQuery, model };
-      const res = await fetch(TEXT_GEN_ENDPOINT, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error(`テキスト生成に失敗: ${res.status}`);
-      const data = await res.json();
-      return data.text || '';
+      console.log('Calling text generation API:', TEXT_GEN_ENDPOINT);
+      console.log('Payload:', payload);
+
+      try {
+        const res = await fetch(TEXT_GEN_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        console.log('Response status:', res.status);
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          console.error('Error response:', errorText);
+          throw new Error(`テキスト生成に失敗: ${res.status} - ${errorText.substring(0, 200)}`);
+        }
+
+        const data = await res.json();
+        console.log('Response data:', data);
+        return data.text || '';
+      } catch (e) {
+        console.error('Text generation error:', e);
+        throw e;
+      }
     }
 
     async function summarize() {
       const t = $txt.value.trim();
-      if (!t) return;
+      if (!t) {
+        alert('文字起こしテキストが空です。');
+        return;
+      }
       $sum.disabled = $terms.disabled = true;
       $out.innerHTML = '<pre>✨ 要約を生成中...</pre>';
       try {
         const sys = 'あなたはプロのサマライザーです。提供された日本語の会議または会話の文字起こしを読み、主要な論点、決定事項、次のステップを含む簡潔な箇条書きの要約を日本語で作成してください。';
         const uq = `以下の文字起こしを要約してください:\n\n---\n${t}`;
+        console.log('Starting summarization...');
         const text = await callTextGen(sys, uq);
         $out.innerHTML = `<h3>要約結果</h3><pre>${text}</pre>`;
         setStatus('要約が完了しました。', 'success');
       } catch (e) {
-        $out.innerHTML = `<pre style="color:#c62828">分析エラー: ${e?.message || e}</pre>`;
-        setStatus('要約に失敗しました。', 'error');
+        console.error('Summarization error:', e);
+        const errorMsg = e?.message || String(e);
+        $out.innerHTML = `<pre style="color:#c62828">要約エラー: ${errorMsg}\n\nブラウザのコンソール（F12）で詳細を確認してください。</pre>`;
+        setStatus('要約に失敗しました。コンソールを確認してください。', 'error');
       } finally {
         updateButtons(false);
       }
@@ -628,18 +653,24 @@ async function startTranscription() {
 
     async function terms() {
       const t = $txt.value.trim();
-      if (!t) return;
+      if (!t) {
+        alert('文字起こしテキストが空です。');
+        return;
+      }
       $sum.disabled = $terms.disabled = true;
       $out.innerHTML = '<pre>✨ 専門用語を分析中...</pre>';
       try {
         const sys = 'あなたは学術的なアシスタントです。提供された日本語のテキストから、専門的/技術的な用語を最大5つ抽出し、非専門家にも分かる簡潔で正確な日本語の説明を出力してください。出力は「【用語】: 説明文」の箇条書き。';
         const uq = `以下の文字起こしから専門用語を抽出し、説明してください:\n\n---\n${t}`;
+        console.log('Starting term extraction...');
         const text = await callTextGen(sys, uq);
         $out.innerHTML = `<h3>専門用語分析結果</h3><pre>${text}</pre>`;
         setStatus('専門用語分析が完了しました。', 'success');
       } catch (e) {
-        $out.innerHTML = `<pre style="color:#c62828">分析エラー: ${e?.message || e}</pre>`;
-        setStatus('専門用語分析に失敗しました。', 'error');
+        console.error('Term extraction error:', e);
+        const errorMsg = e?.message || String(e);
+        $out.innerHTML = `<pre style="color:#c62828">専門用語分析エラー: ${errorMsg}\n\nブラウザのコンソール（F12）で詳細を確認してください。</pre>`;
+        setStatus('専門用語分析に失敗しました。コンソールを確認してください。', 'error');
       } finally {
         updateButtons(false);
       }
