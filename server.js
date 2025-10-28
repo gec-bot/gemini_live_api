@@ -52,10 +52,28 @@ app.post('/api-key', async (req, res) => {
   }
 });
 
+// デバッグ用：利用可能なモデルをリスト
+app.get('/list-models', async (req, res) => {
+  try {
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${GOOGLE_API_KEY}`
+    );
+    if (!r.ok) {
+      const t = await r.text();
+      return res.status(r.status).json({ error: t });
+    }
+    const data = await r.json();
+    res.json(data);
+  } catch (e) {
+    console.error('List models error:', e);
+    res.status(500).json({ error: e?.message ?? 'list models error' });
+  }
+});
+
 // (2) テキスト生成の安全プロキシ（要約/用語チェック用）
 app.post('/text-generate', async (req, res) => {
   try {
-    const { systemInstruction, userQuery, model = 'gemini-2.0-flash-live-001' } = req.body;
+    const { systemInstruction, userQuery, model = 'gemini-1.5-flash' } = req.body;
     const payload = {
       contents: [{ parts: [{ text: userQuery }] }],
       systemInstruction: { parts: [{ text: systemInstruction }] },
