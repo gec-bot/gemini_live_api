@@ -110,21 +110,25 @@
     const $closeHistory = document.getElementById('closeHistory');
 
     // ===== 状態 =====
-    let ws = null;            // WebSocket 接続
+    let wsMic = null;         // マイク用WebSocket 接続
+    let wsSys = null;         // システム音声用WebSocket 接続
     let audioContext = null;  // WebAudio
     let micStream = null;     // マイク
     let sysStream = null;     // システム音声（画面共有）
-    let recorder = null;      // ScriptProcessorNode
+    let micRecorder = null;   // マイク用ScriptProcessorNode
+    let sysRecorder = null;   // システム音声用ScriptProcessorNode
     let currentSessionId = null; // 現在のセッションID
     let autoSaveInterval = null; // 自動保存タイマー
 
     // 話者判定
-    let currentSpeaker = null; // 'operator' | 'customer' | null
     let micAnalyser = null;
     let sysAnalyser = null;
     let micDataArray = null;
     let sysDataArray = null;
     let levelMonitorInterval = null; // 音量モニタリング用のインターバル
+
+    // 文字起こし結果のマージ用
+    let transcriptBuffer = []; // {timestamp, speaker, text} の配列
 
     // 音量レベルを計算（RMS値）
     function calculateAudioLevel(analyser, dataArray) {
@@ -140,7 +144,7 @@
       return rms;
     }
 
-    // 音量レベルを監視して話者を判定
+    // 音量レベルを監視（表示のみ）
     function monitorAudioLevels() {
       const micLevel = calculateAudioLevel(micAnalyser, micDataArray);
       const sysLevel = calculateAudioLevel(sysAnalyser, sysDataArray);
@@ -154,31 +158,23 @@
         $sysLevelBar.style.width = sysPercent + '%';
       }
 
-      // 話者判定（音量の大きい方、閾値0.05以上）
+      // 両方が話している場合の表示
       const threshold = 0.05;
-      let newSpeaker = null;
+      const micActive = micLevel > threshold;
+      const sysActive = sysLevel > threshold;
 
-      if (micLevel > threshold || sysLevel > threshold) {
-        if (micLevel > sysLevel) {
-          newSpeaker = 'operator';
-        } else {
-          newSpeaker = 'customer';
-        }
-      }
-
-      // 話者が変わった場合のみ更新
-      if (newSpeaker !== currentSpeaker) {
-        currentSpeaker = newSpeaker;
-        if (currentSpeaker === 'operator') {
-          $currentSpeaker.textContent = '現在の話者: オペレーター（マイク）';
-          $currentSpeaker.style.color = '#1967d2';
-        } else if (currentSpeaker === 'customer') {
-          $currentSpeaker.textContent = '現在の話者: 顧客（コラボス）';
-          $currentSpeaker.style.color = '#e91e63';
-        } else {
-          $currentSpeaker.textContent = '現在の話者: --';
-          $currentSpeaker.style.color = '#666';
-        }
+      if (micActive && sysActive) {
+        $currentSpeaker.textContent = '現在の話者: 両方が同時に発話中';
+        $currentSpeaker.style.color = '#ff9800';
+      } else if (micActive) {
+        $currentSpeaker.textContent = '現在の話者: オペレーター（マイク）';
+        $currentSpeaker.style.color = '#1967d2';
+      } else if (sysActive) {
+        $currentSpeaker.textContent = '現在の話者: 顧客（コラボス）';
+        $currentSpeaker.style.color = '#e91e63';
+      } else {
+        $currentSpeaker.textContent = '現在の話者: --';
+        $currentSpeaker.style.color = '#666';
       }
     }
 
@@ -194,13 +190,35 @@
       if (levelMonitorInterval) {
         clearInterval(levelMonitorInterval);
         levelMonitorInterval = null;
-        currentSpeaker = null;
         $currentSpeaker.textContent = '現在の話者: --';
         $currentSpeaker.style.color = '#666';
         $micLevelBar.style.width = '0%';
         $sysLevelBar.style.width = '0%';
         console.log('Audio level monitoring stopped');
       }
+    }
+
+    // ===== 文字起こし結果のマージ =====
+    function addTranscript(speaker, text) {
+      const timestamp = Date.now();
+      transcriptBuffer.push({ timestamp, speaker, text });
+
+      // バッファをタイムスタンプ順にソート
+      transcriptBuffer.sort((a, b) => a.timestamp - b.timestamp);
+
+      // 表示を更新
+      updateTranscriptDisplay();
+    }
+
+    function updateTranscriptDisplay() {
+      // バッファの内容を結合して表示
+      let displayText = '';
+      for (const item of transcriptBuffer) {
+        const speakerLabel = item.speaker === 'operator' ? '[オペレーター] ' : '[顧客] ';
+        displayText += speakerLabel + item.text + '\n';
+      }
+      $txt.value = displayText;
+      $txt.scrollTop = $txt.scrollHeight;
     }
 
     // ===== セッション管理 =====
@@ -281,11 +299,144 @@
       return apiKey;
     }
 
+    // 個別のWebSocket接続をセットアップ
+    async function setupWebSocket(apiKey, speaker) {
+      const url = `${GEMINI_LIVE_ENDPOINT}?key=${encodeURIComponent(apiKey)}`;
+      const ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
+
+      return new Promise((resolve, reject) => {
+        ws.onopen = async () => {
+          console.log(`WebSocket opened for ${speaker}`);
+
+          // セットアップメッセージを送信
+          const init = {
+            setup: {
+              model: 'models/gemini-2.0-flash-live-001',
+              generationConfig: {
+                responseModalities: ['TEXT'],
+              },
+              systemInstruction: {
+                parts: [{
+                  text: 'あなたはユーザーの音声入力を厳密に文字起こしするエンジンです。句読点含め正確な日本語で書き起こしてください。応答や要約はしないでください。'
+                }]
+              }
+            }
+          };
+          console.log(`Sending setup for ${speaker}:`, JSON.stringify(init, null, 2));
+          ws.send(JSON.stringify(init));
+        };
+
+        let setupComplete = false;
+
+        ws.onmessage = (ev) => {
+          let messageText;
+          if (ev.data instanceof ArrayBuffer) {
+            const decoder = new TextDecoder('utf-8');
+            messageText = decoder.decode(ev.data);
+          } else {
+            messageText = ev.data;
+          }
+
+          try {
+            const data = JSON.parse(messageText);
+            console.log(`Received message for ${speaker}:`, JSON.stringify(data, null, 2));
+
+            if (data.error) {
+              console.error(`Server error for ${speaker}:`, data.error);
+              setStatus(`サーバーエラー (${speaker}): ${JSON.stringify(data.error)}`, 'error');
+            }
+
+            if (data.setupComplete && !setupComplete) {
+              console.log(`Setup complete for ${speaker}`);
+              setupComplete = true;
+              resolve({ ws, setupComplete: true });
+            }
+
+            // 文字起こし結果を処理
+            if (data.serverContent) {
+              const text = data.serverContent.modelTurn?.parts?.[0]?.text;
+              if (text) {
+                console.log(`Transcription text for ${speaker}:`, text);
+                addTranscript(speaker, text);
+              }
+            }
+          } catch (err) {
+            console.warn(`Message parse error for ${speaker}:`, err, 'Data:', ev.data);
+          }
+        };
+
+        ws.onerror = (err) => {
+          console.error(`WebSocket error for ${speaker}`, err);
+          reject(err);
+        };
+
+        ws.onclose = (ev) => {
+          console.warn(`WS closed for ${speaker}:`, {code: ev.code, reason: ev.reason});
+        };
+      });
+    }
+
+    // 音声処理パイプラインをセットアップ
+    function setupAudioProcessor(stream, ws, speaker, channelCount = 1) {
+      const source = audioContext.createMediaStreamSource(stream);
+
+      let recorder;
+      try {
+        recorder = audioContext.createScriptProcessor(CHUNK_SIZE, channelCount, 1);
+      } catch (e) {
+        recorder = audioContext.createScriptProcessor(2048, channelCount, 1);
+      }
+
+      source.connect(recorder);
+      recorder.connect(audioContext.destination);
+
+      let audioChunkCount = 0;
+      recorder.onaudioprocess = (e) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+        const ch0 = e.inputBuffer.getChannelData(0);
+        const len = ch0.length;
+        const pcm16 = new Int16Array(len);
+
+        for (let i = 0; i < len; i++) {
+          const s = Math.max(-1, Math.min(1, ch0[i]));
+          pcm16[i] = (s * 0x7fff) | 0;
+        }
+
+        // 音声データをbase64エンコードして送信
+        const uint8Array = new Uint8Array(pcm16.buffer);
+        let binary = '';
+        for (let i = 0; i < uint8Array.byteLength; i++) {
+          binary += String.fromCharCode(uint8Array[i]);
+        }
+        const base64Audio = btoa(binary);
+
+        const audioMsg = {
+          realtimeInput: {
+            audio: {
+              mimeType: 'audio/pcm;rate=16000',
+              data: base64Audio
+            }
+          }
+        };
+        ws.send(JSON.stringify(audioMsg));
+
+        if (audioChunkCount < 3) {
+          console.log(`Sending audio chunk #${audioChunkCount} for ${speaker}, size: ${pcm16.buffer.byteLength} bytes`);
+          audioChunkCount++;
+        }
+      };
+
+      return { source, recorder };
+    }
+
 async function startTranscription() {
   setStatus('音声ストリーム取得中...');
   updateButtons(true);
   $out.innerHTML = '';
   $txt.value = '';
+  transcriptBuffer = []; // バッファをクリア
 
   // 新しいセッションを作成
   createSession();
@@ -296,8 +447,9 @@ async function startTranscription() {
     // デバッグ情報を表示
     $audioDebug.style.display = 'block';
 
-    // 1) マイク取得
-    const micOnly = !$useSystemAudio.checked; // チェックボックスで制御
+    const useSystemAudio = $useSystemAudio.checked;
+
+    // 1) マイクを取得
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
 
     // マイク情報を表示
@@ -305,30 +457,12 @@ async function startTranscription() {
     $micInfo.textContent = `マイク: ${micTrack.label || '接続済み'} (デバイスID: ${micTrack.id.substring(0, 8)}...)`;
     console.log('Microphone track:', micTrack);
 
-    if (micOnly) {
-      setStatus('マイクのみで接続準備中...');
-      $sysInfo.textContent = 'システム音声: 使用しない';
-    } else {
+    // 2) システム音声を取得（オプション）
+    if (useSystemAudio) {
       setStatus('マイク取得完了。次に画面共有（システム音声）を選択してください...');
-    }
-
-    // 2) WebAudio 準備（16kHz）
-    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
-    const micSrc = audioContext.createMediaStreamSource(micStream);
-
-    // マイク用のAnalyserNodeを作成
-    micAnalyser = audioContext.createAnalyser();
-    micAnalyser.fftSize = 256;
-    micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
-    micSrc.connect(micAnalyser);
-
-    let merger = null;
-    if (!micOnly) {
-      // システム音声（コラボスなど）をキャプチャ
       try {
-        // Chromeの画面共有ダイアログで「システムオーディオを共有」にチェックを入れてください
         sysStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true, // 画面選択のため必要（映像は使わない）
+          video: true,
           audio: {
             echoCancellation: false,
             noiseSuppression: false,
@@ -336,217 +470,81 @@ async function startTranscription() {
             suppressLocalAudioPlayback: false
           }
         });
+
         // 映像トラックは不要なので停止
         sysStream.getVideoTracks().forEach(t => t.stop());
-        console.log('System audio tracks:', sysStream.getAudioTracks().length);
+
+        const sysTracks = sysStream.getAudioTracks();
+        if (sysTracks.length > 0) {
+          const sysTrack = sysTracks[0];
+          $sysInfo.textContent = `システム音声: ${sysTrack.label || '接続済み'}`;
+          console.log('System audio track:', sysTrack);
+        } else {
+          console.warn('システム音声トラックが見つかりません');
+          $sysInfo.textContent = 'システム音声: 取得できませんでした（「システムオーディオを共有」にチェックを入れてください）';
+          sysStream = null;
+        }
       } catch (e) {
-        console.warn('画面共有がキャンセルされました。マイクのみで続行します。', e);
+        console.warn('画面共有がキャンセルされました。', e);
         setStatus('画面共有がキャンセルされました。マイクのみで続行します。');
+        $sysInfo.textContent = 'システム音声: キャンセルされました';
         sysStream = null;
       }
+    } else {
+      $sysInfo.textContent = 'システム音声: 使用しない';
     }
 
-    // 入力チャンネルを安全に 1ch にまとめる
-    const inChannels = (micOnly || !sysStream) ? 1 : 2;
-    merger = audioContext.createChannelMerger(inChannels);
-    micSrc.connect(merger, 0, 0);
+    // 3) WebAudio 準備（16kHz）
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
 
-    if (!micOnly && sysStream) {
-      const sysTracks = sysStream.getAudioTracks();
-      const videoTracks = sysStream.getVideoTracks();
+    // マイク用のAnalyserNodeを作成
+    const micSrc = audioContext.createMediaStreamSource(micStream);
+    micAnalyser = audioContext.createAnalyser();
+    micAnalyser.fftSize = 256;
+    micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
+    micSrc.connect(micAnalyser);
 
-      // 共有しているソースの情報を表示
-      if (videoTracks.length > 0) {
-        console.log('Shared source:', videoTracks[0].label);
-      }
-
-      if (sysTracks.length > 0) {
-        const sysTrack = sysTracks[0];
-        $sysInfo.textContent = `システム音声: ${sysTrack.label || '接続済み'} (ソース: ${videoTracks[0]?.label || '不明'})`;
-        console.log('System audio track:', sysTrack);
-        console.log('Video track (shared source):', videoTracks[0]);
-
-        const sysSrc = audioContext.createMediaStreamSource(sysStream);
-
-        // システム音声用のAnalyserNodeを作成
-        sysAnalyser = audioContext.createAnalyser();
-        sysAnalyser.fftSize = 256;
-        sysDataArray = new Uint8Array(sysAnalyser.frequencyBinCount);
-        sysSrc.connect(sysAnalyser);
-
-        sysSrc.connect(merger, 0, 1);
-        setStatus('マイク + システム音声（コラボス音声）を送信します。接続準備中...');
-        console.log('System audio enabled: マイクとシステム音声の両方をキャプチャします');
-      } else {
-        setStatus('システム音声トラックが見つからず、マイクのみで続行します。');
-        $sysInfo.textContent = 'システム音声: 取得できませんでした（「システムオーディオを共有」にチェックを入れてください）';
-        console.warn('画面共有時に「システムオーディオを共有」にチェックを入れてください');
-      }
+    // システム音声用のAnalyserNodeを作成
+    if (sysStream && sysStream.getAudioTracks().length > 0) {
+      const sysSrc = audioContext.createMediaStreamSource(sysStream);
+      sysAnalyser = audioContext.createAnalyser();
+      sysAnalyser.fftSize = 256;
+      sysDataArray = new Uint8Array(sysAnalyser.frequencyBinCount);
+      sysSrc.connect(sysAnalyser);
     }
 
-    // ScriptProcessor は環境差で NotSupported になりうるので try で保護
-    try {
-      recorder = audioContext.createScriptProcessor(CHUNK_SIZE, inChannels, 1);
-    } catch (e) {
-      recorder = audioContext.createScriptProcessor(2048, inChannels, 1);
-    }
-    merger.connect(recorder);
-    recorder.connect(audioContext.destination);
-
-    // 3) APIキーで Live API 接続
+    // 4) APIキーを取得
     const apiKey = await fetchApiKey();
-    const url = `${GEMINI_LIVE_ENDPOINT}?key=${encodeURIComponent(apiKey)}`;
-    ws = new WebSocket(url);
-    ws.binaryType = "arraybuffer";
 
-    ws.onopen = async () => {
-      setStatus('Gemini Live に接続しました。セットアップ中...', 'success');
-      try { await audioContext.resume(); } catch {}
+    // 5) マイク用のWebSocket接続を作成
+    setStatus('マイク用の接続を作成中...', 'success');
+    const { ws: micWs } = await setupWebSocket(apiKey, 'operator');
+    wsMic = micWs;
 
-      // 正しいフォーマットでセットアップメッセージを送信
-      const init = {
-        setup: {
-          model: 'models/gemini-2.0-flash-live-001',
-          generationConfig: {
-            responseModalities: ['TEXT'],
-          },
-          systemInstruction: {
-            parts: [{
-              text: 'あなたはユーザーの音声入力を厳密に文字起こしするエンジンです。句読点含め正確な日本語で書き起こしてください。応答や要約はしないでください。'
-            }]
-          }
-        }
-      };
-      console.log('Sending setup:', JSON.stringify(init, null, 2));
-      ws.send(JSON.stringify(init));
-    };
+    // 6) システム音声用のWebSocket接続を作成（オプション）
+    if (sysStream && sysStream.getAudioTracks().length > 0) {
+      setStatus('システム音声用の接続を作成中...', 'success');
+      const { ws: sysWs } = await setupWebSocket(apiKey, 'customer');
+      wsSys = sysWs;
+    }
 
-    let setupComplete = false;
+    // 7) AudioContextを再開
+    try { await audioContext.resume(); } catch {}
 
-    ws.onmessage = (ev) => {
-      // ArrayBufferをテキストにデコード
-      let messageText;
-      if (ev.data instanceof ArrayBuffer) {
-        const decoder = new TextDecoder('utf-8');
-        messageText = decoder.decode(ev.data);
-      } else {
-        messageText = ev.data;
-      }
+    // 8) マイク用の音声処理パイプラインをセットアップ
+    const { recorder: micRec } = setupAudioProcessor(micStream, wsMic, 'operator');
+    micRecorder = micRec;
 
-      // JSONメッセージの処理
-      try {
-        const data = JSON.parse(messageText);
-        console.log('Received message:', JSON.stringify(data, null, 2));
+    // 9) システム音声用の音声処理パイプラインをセットアップ
+    if (sysStream && sysStream.getAudioTracks().length > 0) {
+      const { recorder: sysRec } = setupAudioProcessor(sysStream, wsSys, 'customer');
+      sysRecorder = sysRec;
+    }
 
-        // エラーメッセージのチェック
-        if (data.error) {
-          console.error('Server error:', data.error);
-          setStatus(`サーバーエラー: ${JSON.stringify(data.error)}`, 'error');
-        }
+    // 10) 音量レベル監視を開始
+    startLevelMonitoring();
 
-        // セットアップ完了メッセージを待つ
-        if (data.setupComplete) {
-          console.log('Setup complete, starting audio transmission...');
-          setupComplete = true;
-          setStatus('セットアップ完了。文字起こしを開始します。', 'success');
-
-          // 音量レベル監視を開始
-          startLevelMonitoring();
-
-          // セットアップ完了後、音声送信を開始
-          let audioChunkCount = 0;
-          recorder.onaudioprocess = (e) => {
-            if (!ws || ws.readyState !== WebSocket.OPEN || !setupComplete) return;
-
-            const nCh = e.inputBuffer.numberOfChannels;
-            const ch0 = nCh > 0 ? e.inputBuffer.getChannelData(0) : new Float32Array(0);
-            const ch1 = nCh > 1 ? e.inputBuffer.getChannelData(1) : null;
-
-            const len = ch0.length;
-            const pcm16 = new Int16Array(len);
-            for (let i = 0; i < len; i++) {
-              const r = ch1 ? ch1[i] : 0;
-              const mixed = ((ch0[i] || 0) + (r || 0)) / (ch1 ? 2 : 1);
-              const s = Math.max(-1, Math.min(1, mixed));
-              pcm16[i] = (s * 0x7fff) | 0;
-            }
-
-            // realtimeInputメッセージとして音声を送信（正しいフォーマット）
-            const uint8Array = new Uint8Array(pcm16.buffer);
-            let binary = '';
-            for (let i = 0; i < uint8Array.byteLength; i++) {
-              binary += String.fromCharCode(uint8Array[i]);
-            }
-            const base64Audio = btoa(binary);
-
-            const audioMsg = {
-              realtimeInput: {
-                audio: {
-                  mimeType: 'audio/pcm;rate=16000',
-                  data: base64Audio
-                }
-              }
-            };
-            ws.send(JSON.stringify(audioMsg));
-
-            // 最初の数チャンクだけログ出力
-            if (audioChunkCount < 3) {
-              console.log(`Sending audio chunk #${audioChunkCount}, size: ${pcm16.buffer.byteLength} bytes`);
-              if (audioChunkCount === 0) {
-                console.log('Sample audio message:', audioMsg);
-              }
-              audioChunkCount++;
-            }
-          };
-        }
-
-        // サーバーからのコンテンツ（文字起こし結果）を処理
-        if (data.serverContent) {
-          console.log('serverContent received:', data.serverContent);
-
-          // modelTurn.parts[0].text から取得
-          const text = data.serverContent.modelTurn?.parts?.[0]?.text;
-          if (text) {
-            console.log('Transcription text:', text);
-
-            // 話者ラベルを付加
-            let speakerLabel = '';
-            if (currentSpeaker === 'operator') {
-              speakerLabel = '[オペレーター] ';
-            } else if (currentSpeaker === 'customer') {
-              speakerLabel = '[顧客] ';
-            }
-
-            $txt.value += speakerLabel + text;
-            $txt.scrollTop = $txt.scrollHeight;
-          } else {
-            console.log('serverContent has no text in modelTurn.parts[0]');
-          }
-        }
-
-        // その他のメッセージタイプもログ出力
-        if (data.toolCall) {
-          console.log('toolCall received:', data.toolCall);
-        }
-        if (data.toolCallCancellation) {
-          console.log('toolCallCancellation received:', data.toolCallCancellation);
-        }
-      } catch (err) {
-        console.warn('Message parse error:', err, 'Data:', ev.data);
-      }
-    };
-
-    ws.onerror = (err) => {
-      console.error('WebSocket error', err);
-      setStatus('WebSocketエラー。コンソールを確認してください。', 'error');
-      stopTranscription();
-    };
-
-    ws.onclose = (ev) => {
-      console.warn("WS closed:", {code: ev.code, reason: ev.reason});
-      setStatus(`接続が切断されました（code=${ev.code} reason=${ev.reason || 'n/a'}）。再開できます。`);
-      updateButtons(false);
-    };
+    setStatus('文字起こしを開始しました。2つの音声ソースが独立して処理されます。', 'success');
   } catch (e) {
     console.error('startTranscription error', e);
     const msg = (e?.name === 'NotAllowedError' || e?.name === 'NotFoundError')
@@ -569,16 +567,24 @@ async function startTranscription() {
       // 音量モニタリングを停止
       stopLevelMonitoring();
 
-      // WebSocket
-      try { ws?.close(1000, 'user close'); } catch(_){}
-      ws = null;
-      // Audio
-      try { recorder?.disconnect(); } catch(_){}
-      recorder = null;
+      // WebSocket接続を閉じる
+      try { wsMic?.close(1000, 'user close'); } catch(_){}
+      wsMic = null;
+      try { wsSys?.close(1000, 'user close'); } catch(_){}
+      wsSys = null;
+
+      // Audio processors
+      try { micRecorder?.disconnect(); } catch(_){}
+      micRecorder = null;
+      try { sysRecorder?.disconnect(); } catch(_){}
+      sysRecorder = null;
+
       try { audioContext?.close(); } catch(_){}
       audioContext = null;
+
       try { micStream?.getTracks().forEach(t => t.stop()); } catch(_){}
       micStream = null;
+
       try { sysStream?.getTracks().forEach(t => t.stop()); } catch(_){}
       sysStream = null;
 
