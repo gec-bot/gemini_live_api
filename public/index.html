@@ -31,11 +31,12 @@
     <div class="controls" style="margin-bottom: 12px;">
       <button id="start" class="btn primary">🎤 文字起こし開始</button>
       <button id="stop" class="btn danger" disabled>⏹ 停止</button>
+      <button id="configDevices" class="btn">⚙️ デバイス設定</button>
       <label style="margin-left: 16px;">
         <input type="checkbox" id="useSystemAudio" checked>
         システム音声（コラボス）も含める
       </label>
-      <span class="hint">※ ブラウザがマイクへのアクセスを求めます</span>
+      <span class="hint">※ 初回のみデバイスを選択してください</span>
     </div>
 
     <div id="audioDebug" style="margin: 12px 0; padding: 10px; background: #f0f0f0; border-radius: 8px; display: none;">
@@ -78,6 +79,42 @@
         </div>
       </div>
     </div>
+
+    <!-- デバイス設定モーダル -->
+    <div id="deviceModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1001;">
+      <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 24px; border-radius: 12px; max-width: 600px; width: 90%;">
+        <h2 style="margin-top: 0;">オーディオデバイス設定</h2>
+        <p style="color: #666; font-size: 14px;">各音声入力デバイスを選択してください。設定は保存され、次回から自動的に使用されます。</p>
+
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-weight: bold; margin-bottom: 8px;">
+            オペレーター用マイク:
+          </label>
+          <select id="micDeviceSelect" class="btn" style="width: 100%; text-align: left;">
+            <option value="">デバイスを選択...</option>
+          </select>
+        </div>
+
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-weight: bold; margin-bottom: 8px;">
+            顧客音声用デバイス（コラボス/仮想オーディオケーブル）:
+          </label>
+          <select id="sysDeviceSelect" class="btn" style="width: 100%; text-align: left;">
+            <option value="">デバイスを選択...</option>
+            <option value="NONE">使用しない</option>
+          </select>
+          <p style="font-size: 12px; color: #666; margin-top: 4px;">
+            ※ VB-CABLEなどの仮想オーディオデバイスを選択してください
+          </p>
+        </div>
+
+        <div style="margin-top: 16px; text-align: right; display: flex; gap: 8px; justify-content: flex-end;">
+          <button id="resetDevices" class="btn" style="background: #ff9800; color: white; border-color: #ff9800;">設定をリセット</button>
+          <button id="cancelDeviceConfig" class="btn">キャンセル</button>
+          <button id="saveDeviceConfig" class="btn primary">保存</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script type="module">
@@ -108,6 +145,13 @@
     const $historyModal = document.getElementById('historyModal');
     const $historyList = document.getElementById('historyList');
     const $closeHistory = document.getElementById('closeHistory');
+    const $configDevices = document.getElementById('configDevices');
+    const $deviceModal = document.getElementById('deviceModal');
+    const $micDeviceSelect = document.getElementById('micDeviceSelect');
+    const $sysDeviceSelect = document.getElementById('sysDeviceSelect');
+    const $saveDeviceConfig = document.getElementById('saveDeviceConfig');
+    const $cancelDeviceConfig = document.getElementById('cancelDeviceConfig');
+    const $resetDevices = document.getElementById('resetDevices');
 
     // ===== 状態 =====
     let wsMic = null;         // マイク用WebSocket 接続
@@ -278,6 +322,106 @@
       }
     }
 
+    // ===== デバイス管理 =====
+    async function listAudioDevices() {
+      try {
+        // まず権限を取得
+        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tempStream.getTracks().forEach(t => t.stop());
+
+        // デバイス一覧を取得
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(d => d.kind === 'audioinput');
+        console.log('利用可能なマイクデバイス:', audioInputs);
+        return audioInputs;
+      } catch (e) {
+        console.error('デバイス列挙エラー:', e);
+        return [];
+      }
+    }
+
+    async function showDeviceConfig() {
+      const devices = await listAudioDevices();
+
+      if (devices.length === 0) {
+        alert('オーディオデバイスが見つかりません。マイクが接続されているか確認してください。');
+        return;
+      }
+
+      // デバイス選択肢を設定
+      $micDeviceSelect.innerHTML = '<option value="">デバイスを選択...</option>';
+      $sysDeviceSelect.innerHTML = '<option value="">デバイスを選択...</option><option value="NONE">使用しない</option>';
+
+      devices.forEach(device => {
+        const option1 = document.createElement('option');
+        option1.value = device.deviceId;
+        option1.textContent = device.label || `マイク ${device.deviceId.substring(0, 8)}`;
+        $micDeviceSelect.appendChild(option1);
+
+        const option2 = document.createElement('option');
+        option2.value = device.deviceId;
+        option2.textContent = device.label || `マイク ${device.deviceId.substring(0, 8)}`;
+        $sysDeviceSelect.appendChild(option2);
+      });
+
+      // 保存された設定を読み込み
+      const savedMicDeviceId = localStorage.getItem('micDeviceId');
+      const savedSysDeviceId = localStorage.getItem('sysDeviceId');
+
+      if (savedMicDeviceId) $micDeviceSelect.value = savedMicDeviceId;
+      if (savedSysDeviceId) $sysDeviceSelect.value = savedSysDeviceId;
+
+      $deviceModal.style.display = 'block';
+    }
+
+    function saveDeviceConfig() {
+      const micDeviceId = $micDeviceSelect.value;
+      const sysDeviceId = $sysDeviceSelect.value;
+
+      if (!micDeviceId) {
+        alert('オペレーター用マイクを選択してください。');
+        return;
+      }
+
+      localStorage.setItem('micDeviceId', micDeviceId);
+
+      if (sysDeviceId && sysDeviceId !== 'NONE') {
+        localStorage.setItem('sysDeviceId', sysDeviceId);
+        $useSystemAudio.checked = true;
+      } else {
+        localStorage.removeItem('sysDeviceId');
+        $useSystemAudio.checked = false;
+      }
+
+      $deviceModal.style.display = 'none';
+      setStatus('デバイス設定を保存しました。', 'success');
+    }
+
+    function resetDeviceConfig() {
+      if (!confirm('デバイス設定をリセットしますか？次回起動時に再度選択が必要になります。')) return;
+
+      localStorage.removeItem('micDeviceId');
+      localStorage.removeItem('sysDeviceId');
+      $deviceModal.style.display = 'none';
+      setStatus('デバイス設定をリセットしました。', 'success');
+    }
+
+    function hideDeviceConfig() {
+      $deviceModal.style.display = 'none';
+    }
+
+    // 初回起動時にデバイス設定を確認
+    async function checkDeviceConfig() {
+      const micDeviceId = localStorage.getItem('micDeviceId');
+
+      if (!micDeviceId) {
+        // 初回起動時は設定を促す
+        setStatus('初回起動です。「デバイス設定」ボタンから使用するマイクを選択してください。', 'error');
+        return false;
+      }
+      return true;
+    }
+
     function setStatus(msg, type='') {
       $status.textContent = `ステータス: ${msg}`;
       $status.className = `status-message ${type}`.trim();
@@ -432,6 +576,13 @@
     }
 
 async function startTranscription() {
+  // デバイス設定を確認
+  const hasConfig = await checkDeviceConfig();
+  if (!hasConfig) {
+    alert('まず「デバイス設定」ボタンから使用するマイクを選択してください。');
+    return;
+  }
+
   setStatus('音声ストリーム取得中...');
   updateButtons(true);
   $out.innerHTML = '';
@@ -449,45 +600,42 @@ async function startTranscription() {
 
     const useSystemAudio = $useSystemAudio.checked;
 
-    // 1) マイクを取得
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    // 保存されたデバイスIDを取得
+    const savedMicDeviceId = localStorage.getItem('micDeviceId');
+    const savedSysDeviceId = localStorage.getItem('sysDeviceId');
+
+    // 1) オペレーター用マイクを取得
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: savedMicDeviceId } },
+      video: false
+    });
 
     // マイク情報を表示
     const micTrack = micStream.getAudioTracks()[0];
     $micInfo.textContent = `マイク: ${micTrack.label || '接続済み'} (デバイスID: ${micTrack.id.substring(0, 8)}...)`;
     console.log('Microphone track:', micTrack);
 
-    // 2) システム音声を取得（オプション）
-    if (useSystemAudio) {
-      setStatus('マイク取得完了。次に画面共有（システム音声）を選択してください...');
+    // 2) 顧客音声用デバイスを取得（オプション）
+    if (useSystemAudio && savedSysDeviceId) {
+      setStatus('マイク取得完了。顧客音声用デバイスを取得中...');
       try {
-        sysStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
+        sysStream = await navigator.mediaDevices.getUserMedia({
           audio: {
+            deviceId: { exact: savedSysDeviceId },
             echoCancellation: false,
             noiseSuppression: false,
-            autoGainControl: false,
-            suppressLocalAudioPlayback: false
-          }
+            autoGainControl: false
+          },
+          video: false
         });
 
-        // 映像トラックは不要なので停止
-        sysStream.getVideoTracks().forEach(t => t.stop());
-
-        const sysTracks = sysStream.getAudioTracks();
-        if (sysTracks.length > 0) {
-          const sysTrack = sysTracks[0];
-          $sysInfo.textContent = `システム音声: ${sysTrack.label || '接続済み'}`;
-          console.log('System audio track:', sysTrack);
-        } else {
-          console.warn('システム音声トラックが見つかりません');
-          $sysInfo.textContent = 'システム音声: 取得できませんでした（「システムオーディオを共有」にチェックを入れてください）';
-          sysStream = null;
-        }
+        const sysTrack = sysStream.getAudioTracks()[0];
+        $sysInfo.textContent = `システム音声: ${sysTrack.label || '接続済み'}`;
+        console.log('System audio track:', sysTrack);
       } catch (e) {
-        console.warn('画面共有がキャンセルされました。', e);
-        setStatus('画面共有がキャンセルされました。マイクのみで続行します。');
-        $sysInfo.textContent = 'システム音声: キャンセルされました';
+        console.warn('顧客音声用デバイスの取得に失敗しました。', e);
+        setStatus('顧客音声用デバイスの取得に失敗しました。マイクのみで続行します。');
+        $sysInfo.textContent = 'システム音声: 取得失敗';
         sysStream = null;
       }
     } else {
@@ -760,14 +908,23 @@ async function startTranscription() {
     $saveSession.addEventListener('click', saveCurrentSession);
     $viewHistory.addEventListener('click', showHistory);
     $closeHistory.addEventListener('click', hideHistory);
+    $configDevices.addEventListener('click', showDeviceConfig);
+    $saveDeviceConfig.addEventListener('click', saveDeviceConfig);
+    $cancelDeviceConfig.addEventListener('click', hideDeviceConfig);
+    $resetDevices.addEventListener('click', resetDeviceConfig);
 
     // モーダルの背景クリックで閉じる
     $historyModal.addEventListener('click', (e) => {
       if (e.target === $historyModal) hideHistory();
     });
 
-    // 初期
+    $deviceModal.addEventListener('click', (e) => {
+      if (e.target === $deviceModal) hideDeviceConfig();
+    });
+
+    // 初期化
     updateButtons(false);
+    checkDeviceConfig();
   </script>
 </body>
 </html>
