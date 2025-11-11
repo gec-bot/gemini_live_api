@@ -523,30 +523,71 @@
 
     // 音声処理パイプラインをセットアップ
     function setupAudioProcessor(stream, ws, speaker, channelCount = 1) {
+      console.log(`[${speaker}] Setting up audio processor...`);
+      console.log(`[${speaker}] Stream tracks:`, stream.getAudioTracks());
+      console.log(`[${speaker}] WebSocket state:`, ws?.readyState);
+
       const source = audioContext.createMediaStreamSource(stream);
+      console.log(`[${speaker}] MediaStreamSource created`);
 
       let recorder;
       try {
         recorder = audioContext.createScriptProcessor(CHUNK_SIZE, channelCount, 1);
+        console.log(`[${speaker}] ScriptProcessor created with CHUNK_SIZE=${CHUNK_SIZE}`);
       } catch (e) {
         recorder = audioContext.createScriptProcessor(2048, channelCount, 1);
+        console.log(`[${speaker}] ScriptProcessor created with fallback size=2048`);
       }
 
       source.connect(recorder);
-      // NOTE: destinationへの接続を削除。これにより各ストリームが独立して処理される
-      // recorder.connect(audioContext.destination);
+      console.log(`[${speaker}] Source connected to recorder`);
+
+      // ScriptProcessorNodeを動作させるためにdestinationに接続が必要
+      // ただし、音を出さないようにゲインを0に設定
+      const gainNode = audioContext.createGain();
+      gainNode.gain.value = 0; // 音量を0にして無音化
+      recorder.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      console.log(`[${speaker}] Connected to destination with zero gain (silent)`);
 
       let audioChunkCount = 0;
       recorder.onaudioprocess = (e) => {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (audioChunkCount === 0) {
+          console.log(`[${speaker}] onaudioprocess called for first time`);
+        }
 
-        const ch0 = e.inputBuffer.getChannelData(0);
-        const len = ch0.length;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          if (audioChunkCount === 0) {
+            console.warn(`[${speaker}] WebSocket not ready. State: ${ws?.readyState}`);
+          }
+          return;
+        }
+
+        const inputChannels = e.inputBuffer.numberOfChannels;
+        const len = e.inputBuffer.length;
         const pcm16 = new Int16Array(len);
 
-        for (let i = 0; i < len; i++) {
-          const s = Math.max(-1, Math.min(1, ch0[i]));
-          pcm16[i] = (s * 0x7fff) | 0;
+        // ステレオの場合は両チャンネルをミックス、モノラルの場合はそのまま使用
+        if (inputChannels === 2) {
+          const ch0 = e.inputBuffer.getChannelData(0);
+          const ch1 = e.inputBuffer.getChannelData(1);
+          for (let i = 0; i < len; i++) {
+            const mixed = (ch0[i] + ch1[i]) / 2;  // 両チャンネルをミックス
+            const s = Math.max(-1, Math.min(1, mixed));
+            pcm16[i] = (s * 0x7fff) | 0;
+          }
+          if (audioChunkCount === 0) {
+            console.log(`[${speaker}] Stereo audio detected, mixing both channels`);
+          }
+        } else {
+          const ch0 = e.inputBuffer.getChannelData(0);
+          for (let i = 0; i < len; i++) {
+            const s = Math.max(-1, Math.min(1, ch0[i]));
+            pcm16[i] = (s * 0x7fff) | 0;
+          }
+          if (audioChunkCount === 0) {
+            console.log(`[${speaker}] Mono audio detected`);
+          }
         }
 
         // 音声データをbase64エンコードして送信
@@ -573,7 +614,7 @@
         }
       };
 
-      return { source, recorder };
+      return { source, recorder, gainNode };
     }
 
 async function startTranscription() {
