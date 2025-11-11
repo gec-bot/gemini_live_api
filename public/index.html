@@ -533,7 +533,8 @@
       }
 
       source.connect(recorder);
-      recorder.connect(audioContext.destination);
+      // NOTE: destinationへの接続を削除。これにより各ストリームが独立して処理される
+      // recorder.connect(audioContext.destination);
 
       let audioChunkCount = 0;
       recorder.onaudioprocess = (e) => {
