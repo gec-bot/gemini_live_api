@@ -171,6 +171,10 @@
     let sysDataArray = null;
     let levelMonitorInterval = null; // 音量モニタリング用のインターバル
 
+    // 現在の音量レベル（優先制御用）
+    let currentMicLevel = 0;
+    let currentSysLevel = 0;
+
     // 文字起こし結果のマージ用
     let transcriptBuffer = []; // {timestamp, speaker, text} の配列
 
@@ -188,10 +192,14 @@
       return rms;
     }
 
-    // 音量レベルを監視（表示のみ）
+    // 音量レベルを監視（表示と優先制御用）
     function monitorAudioLevels() {
       const micLevel = calculateAudioLevel(micAnalyser, micDataArray);
       const sysLevel = calculateAudioLevel(sysAnalyser, sysDataArray);
+
+      // グローバル変数に保存（音声送信の優先制御で使用）
+      currentMicLevel = micLevel;
+      currentSysLevel = sysLevel;
 
       // UIの音量バーを更新（0-100%）
       const micPercent = Math.min(100, micLevel * 200); // 倍率調整
@@ -208,7 +216,7 @@
       const sysActive = sysLevel > threshold;
 
       if (micActive && sysActive) {
-        $currentSpeaker.textContent = '現在の話者: 両方が同時に発話中';
+        $currentSpeaker.textContent = '現在の話者: 両方が同時に発話中（コラボス優先）';
         $currentSpeaker.style.color = '#ff9800';
       } else if (micActive) {
         $currentSpeaker.textContent = '現在の話者: オペレーター（マイク）';
@@ -234,6 +242,8 @@
       if (levelMonitorInterval) {
         clearInterval(levelMonitorInterval);
         levelMonitorInterval = null;
+        currentMicLevel = 0;
+        currentSysLevel = 0;
         $currentSpeaker.textContent = '現在の話者: --';
         $currentSpeaker.style.color = '#666';
         $micLevelBar.style.width = '0%';
@@ -551,6 +561,7 @@
       console.log(`[${speaker}] Connected to destination with zero gain (silent)`);
 
       let audioChunkCount = 0;
+      let skippedChunkCount = 0;
       recorder.onaudioprocess = (e) => {
         if (audioChunkCount === 0) {
           console.log(`[${speaker}] onaudioprocess called for first time`);
@@ -559,6 +570,17 @@
         if (!ws || ws.readyState !== WebSocket.OPEN) {
           if (audioChunkCount === 0) {
             console.warn(`[${speaker}] WebSocket not ready. State: ${ws?.readyState}`);
+          }
+          return;
+        }
+
+        // 音量ベースの優先制御: オペレーター(operator)の場合、コラボス(customer)が話していたら送信をスキップ
+        const PRIORITY_THRESHOLD = 0.05; // 話者判定の閾値
+        if (speaker === 'operator' && currentSysLevel > PRIORITY_THRESHOLD) {
+          // コラボスが話している間はオペレーターの音声送信をスキップ
+          if (skippedChunkCount < 3) {
+            console.log(`[${speaker}] Skipping audio chunk (customer speaking, level: ${currentSysLevel.toFixed(3)})`);
+            skippedChunkCount++;
           }
           return;
         }
