@@ -584,9 +584,13 @@
           return;
         }
 
-        // 優先制御を削除: 両方の音声を常に独立して送信
-        // これにより、コラボスとオペレーターが同時に話している場合でも、
-        // 両方の音声が適切に処理されます
+        // コラボス優先制御: オペレーター(operator)の場合、コラボス(customer)が話していたら送信をスキップ
+        // API側で同時発話を認識できないため、顧客音声を優先します
+        const PRIORITY_THRESHOLD = 0.03; // 話者判定の閾値（調整済み）
+        if (speaker === 'operator' && currentSysLevel > PRIORITY_THRESHOLD) {
+          // コラボスが話している間はオペレーターの音声送信をスキップ
+          return;
+        }
 
         const inputChannels = e.inputBuffer.numberOfChannels;
         const len = e.inputBuffer.length;
