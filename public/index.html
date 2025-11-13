@@ -540,6 +540,17 @@
       const source = audioContext.createMediaStreamSource(stream);
       console.log(`[${speaker}] MediaStreamSource created`);
 
+      // 入力音声の増幅用ゲインノードを追加
+      // customerの場合は音量を増幅して認識精度を向上
+      const inputGainNode = audioContext.createGain();
+      if (speaker === 'customer') {
+        inputGainNode.gain.value = 2.0; // コラボス音声を2倍に増幅
+        console.log(`[${speaker}] Input gain set to 2.0x for better recognition`);
+      } else {
+        inputGainNode.gain.value = 1.0; // オペレーターは通常の音量
+      }
+      source.connect(inputGainNode);
+
       let recorder;
       try {
         recorder = audioContext.createScriptProcessor(CHUNK_SIZE, channelCount, 1);
@@ -549,8 +560,8 @@
         console.log(`[${speaker}] ScriptProcessor created with fallback size=2048`);
       }
 
-      source.connect(recorder);
-      console.log(`[${speaker}] Source connected to recorder`);
+      inputGainNode.connect(recorder);
+      console.log(`[${speaker}] InputGain connected to recorder`);
 
       // ScriptProcessorNodeを動作させるためにdestinationに接続が必要
       // ただし、音を出さないようにゲインを0に設定
@@ -561,7 +572,6 @@
       console.log(`[${speaker}] Connected to destination with zero gain (silent)`);
 
       let audioChunkCount = 0;
-      let skippedChunkCount = 0;
       recorder.onaudioprocess = (e) => {
         if (audioChunkCount === 0) {
           console.log(`[${speaker}] onaudioprocess called for first time`);
@@ -574,22 +584,16 @@
           return;
         }
 
-        // 音量ベースの優先制御: オペレーター(operator)の場合、コラボス(customer)が話していたら送信をスキップ
-        const PRIORITY_THRESHOLD = 0.05; // 話者判定の閾値
-        if (speaker === 'operator' && currentSysLevel > PRIORITY_THRESHOLD) {
-          // コラボスが話している間はオペレーターの音声送信をスキップ
-          if (skippedChunkCount < 3) {
-            console.log(`[${speaker}] Skipping audio chunk (customer speaking, level: ${currentSysLevel.toFixed(3)})`);
-            skippedChunkCount++;
-          }
-          return;
-        }
+        // 優先制御を削除: 両方の音声を常に独立して送信
+        // これにより、コラボスとオペレーターが同時に話している場合でも、
+        // 両方の音声が適切に処理されます
 
         const inputChannels = e.inputBuffer.numberOfChannels;
         const len = e.inputBuffer.length;
         const pcm16 = new Int16Array(len);
 
         // ステレオの場合は両チャンネルをミックス、モノラルの場合はそのまま使用
+        let maxAmplitude = 0;
         if (inputChannels === 2) {
           const ch0 = e.inputBuffer.getChannelData(0);
           const ch1 = e.inputBuffer.getChannelData(1);
@@ -597,6 +601,7 @@
             const mixed = (ch0[i] + ch1[i]) / 2;  // 両チャンネルをミックス
             const s = Math.max(-1, Math.min(1, mixed));
             pcm16[i] = (s * 0x7fff) | 0;
+            maxAmplitude = Math.max(maxAmplitude, Math.abs(s));
           }
           if (audioChunkCount === 0) {
             console.log(`[${speaker}] Stereo audio detected, mixing both channels`);
@@ -606,10 +611,19 @@
           for (let i = 0; i < len; i++) {
             const s = Math.max(-1, Math.min(1, ch0[i]));
             pcm16[i] = (s * 0x7fff) | 0;
+            maxAmplitude = Math.max(maxAmplitude, Math.abs(s));
           }
           if (audioChunkCount === 0) {
             console.log(`[${speaker}] Mono audio detected`);
           }
+        }
+
+        // 無音検出: 振幅が非常に小さい場合はスキップ
+        // customerの場合は閾値を下げて、小さい音声も拾うようにする
+        const silenceThreshold = speaker === 'customer' ? 0.001 : 0.005;
+        if (maxAmplitude < silenceThreshold) {
+          // 完全な無音なので送信をスキップ
+          return;
         }
 
         // 音声データをbase64エンコードして送信
@@ -630,13 +644,13 @@
         };
         ws.send(JSON.stringify(audioMsg));
 
-        if (audioChunkCount < 3) {
-          console.log(`Sending audio chunk #${audioChunkCount} for ${speaker}, size: ${pcm16.buffer.byteLength} bytes`);
-          audioChunkCount++;
+        audioChunkCount++;
+        if (audioChunkCount <= 3 || audioChunkCount % 100 === 0) {
+          console.log(`[${speaker}] Sent audio chunk #${audioChunkCount}, size: ${pcm16.buffer.byteLength} bytes, maxAmp: ${maxAmplitude.toFixed(4)}`);
         }
       };
 
-      return { source, recorder, gainNode };
+      return { source, recorder, gainNode, inputGainNode };
     }
 
 async function startTranscription() {
