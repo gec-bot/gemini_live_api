@@ -25,6 +25,7 @@
 <body>
   <div class="container">
     <h1>Gemini Live リアルタイム文字起こし（コールセンター対応）</h1>
+    <div style="color: #666; font-size: 13px; margin-top: -4px; margin-bottom: 12px;">最終更新: 2025-11-14 (コラボス音声認識精度向上版)</div>
 
     <div id="status" class="status-message">ステータス: 準備完了。「文字起こし開始」ボタンをクリックしてください。</div>
 
@@ -511,8 +512,11 @@
             if (data.serverContent) {
               const text = data.serverContent.modelTurn?.parts?.[0]?.text;
               if (text) {
-                console.log(`Transcription text for ${speaker}:`, text);
+                console.log(`%c[${speaker}] ✅ Transcription received: "${text}"`, 'color: green; font-weight: bold');
                 addTranscript(speaker, text);
+              } else {
+                // serverContentはあるがtextがない場合
+                console.log(`[${speaker}] ⚠️ serverContent received but no text:`, JSON.stringify(data.serverContent).substring(0, 200));
               }
             }
           } catch (err) {
@@ -544,8 +548,8 @@
       // customerの場合は音量を増幅して認識精度を向上
       const inputGainNode = audioContext.createGain();
       if (speaker === 'customer') {
-        inputGainNode.gain.value = 2.0; // コラボス音声を2倍に増幅
-        console.log(`[${speaker}] Input gain set to 2.0x for better recognition`);
+        inputGainNode.gain.value = 1.5; // コラボス音声を1.5倍に増幅（クリッピング防止）
+        console.log(`[${speaker}] Input gain set to 1.5x for better recognition`);
       } else {
         inputGainNode.gain.value = 1.0; // オペレーターは通常の音量
       }
@@ -622,13 +626,12 @@
           }
         }
 
-        // 無音検出: 振幅が非常に小さい場合はスキップ
-        // customerの場合は閾値を下げて、小さい音声も拾うようにする
-        const silenceThreshold = speaker === 'customer' ? 0.001 : 0.005;
-        if (maxAmplitude < silenceThreshold) {
-          // 完全な無音なので送信をスキップ
-          return;
-        }
+        // 無音検出を一時的に無効化（デバッグ用）
+        // const silenceThreshold = speaker === 'customer' ? 0.001 : 0.005;
+        // if (maxAmplitude < silenceThreshold) {
+        //   // 完全な無音なので送信をスキップ
+        //   return;
+        // }
 
         // 音声データをbase64エンコードして送信
         const uint8Array = new Uint8Array(pcm16.buffer);
@@ -649,8 +652,14 @@
         ws.send(JSON.stringify(audioMsg));
 
         audioChunkCount++;
-        if (audioChunkCount <= 3 || audioChunkCount % 100 === 0) {
-          console.log(`[${speaker}] Sent audio chunk #${audioChunkCount}, size: ${pcm16.buffer.byteLength} bytes, maxAmp: ${maxAmplitude.toFixed(4)}`);
+        // デバッグ: 最初の10チャンクと100チャンクごとに詳細ログを出力
+        if (audioChunkCount <= 10 || audioChunkCount % 50 === 0) {
+          console.log(`[${speaker}] 📤 Sent chunk #${audioChunkCount}: size=${pcm16.buffer.byteLength}B, maxAmp=${maxAmplitude.toFixed(4)}, wsState=${ws.readyState}`);
+        }
+
+        // customerの場合、音声データが送信されていることを強調表示
+        if (speaker === 'customer' && audioChunkCount % 10 === 0) {
+          console.log(`%c[customer] 🔊 Audio streaming active: chunk ${audioChunkCount}, amplitude: ${maxAmplitude.toFixed(4)}`, 'color: #e91e63; font-weight: bold');
         }
       };
 
@@ -700,6 +709,7 @@ async function startTranscription() {
     // 2) 顧客音声用デバイスを取得（オプション）
     if (useSystemAudio && savedSysDeviceId) {
       setStatus('マイク取得完了。顧客音声用デバイスを取得中...');
+      console.log(`%c🔍 Attempting to get customer audio device: ${savedSysDeviceId}`, 'color: purple; font-weight: bold');
       try {
         sysStream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -713,14 +723,22 @@ async function startTranscription() {
 
         const sysTrack = sysStream.getAudioTracks()[0];
         $sysInfo.textContent = `システム音声: ${sysTrack.label || '接続済み'}`;
-        console.log('System audio track:', sysTrack);
+        console.log(`%c✅ System audio track acquired successfully:`, 'color: green; font-weight: bold', {
+          label: sysTrack.label,
+          id: sysTrack.id,
+          enabled: sysTrack.enabled,
+          muted: sysTrack.muted,
+          readyState: sysTrack.readyState,
+          settings: sysTrack.getSettings()
+        });
       } catch (e) {
-        console.warn('顧客音声用デバイスの取得に失敗しました。', e);
+        console.error('%c❌ 顧客音声用デバイスの取得に失敗:', 'color: red; font-weight: bold', e);
         setStatus('顧客音声用デバイスの取得に失敗しました。マイクのみで続行します。');
         $sysInfo.textContent = 'システム音声: 取得失敗';
         sysStream = null;
       }
     } else {
+      console.log(`ℹ️ System audio disabled. useSystemAudio=${useSystemAudio}, savedSysDeviceId=${savedSysDeviceId}`);
       $sysInfo.textContent = 'システム音声: 使用しない';
     }
 
@@ -736,11 +754,15 @@ async function startTranscription() {
 
     // システム音声用のAnalyserNodeを作成
     if (sysStream && sysStream.getAudioTracks().length > 0) {
+      console.log('%c🔊 Setting up system audio analyser...', 'color: purple; font-weight: bold');
       const sysSrc = audioContext.createMediaStreamSource(sysStream);
       sysAnalyser = audioContext.createAnalyser();
       sysAnalyser.fftSize = 256;
       sysDataArray = new Uint8Array(sysAnalyser.frequencyBinCount);
       sysSrc.connect(sysAnalyser);
+      console.log('%c✅ System audio analyser connected', 'color: green; font-weight: bold');
+    } else {
+      console.log('%c⚠️ System audio analyser NOT created (no stream)', 'color: orange; font-weight: bold');
     }
 
     // 4) APIキーを取得
@@ -754,8 +776,12 @@ async function startTranscription() {
     // 6) システム音声用のWebSocket接続を作成（オプション）
     if (sysStream && sysStream.getAudioTracks().length > 0) {
       setStatus('システム音声用の接続を作成中...', 'success');
+      console.log('%c🌐 Creating WebSocket for customer audio...', 'color: purple; font-weight: bold');
       const { ws: sysWs } = await setupWebSocket(apiKey, 'customer');
       wsSys = sysWs;
+      console.log('%c✅ Customer WebSocket created, readyState:', 'color: green; font-weight: bold', wsSys.readyState);
+    } else {
+      console.log('%c⚠️ Skipping customer WebSocket (no stream)', 'color: orange; font-weight: bold');
     }
 
     // 7) AudioContextを再開
@@ -767,8 +793,12 @@ async function startTranscription() {
 
     // 9) システム音声用の音声処理パイプラインをセットアップ
     if (sysStream && sysStream.getAudioTracks().length > 0) {
+      console.log('%c🎙️ Setting up customer audio processor...', 'color: purple; font-weight: bold');
       const { recorder: sysRec } = setupAudioProcessor(sysStream, wsSys, 'customer');
       sysRecorder = sysRec;
+      console.log('%c✅ Customer audio processor ready', 'color: green; font-weight: bold');
+    } else {
+      console.log('%c⚠️ Skipping customer audio processor (no stream)', 'color: orange; font-weight: bold');
     }
 
     // 10) 音量レベル監視を開始
