@@ -3,311 +3,1040 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Gemini Live リアルタイム文字起こし（コールセンター対応）</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="css/style.css">
+  <title>Gemini Live リアルタイム文字起こし</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; margin: 24px; }
+    .container { max-width: 920px; margin: 0 auto; }
+    h1 { font-size: 22px; margin-bottom: 8px; }
+    .status-message { padding: 10px 12px; border-radius: 8px; background: #f4f6f8; margin: 12px 0; }
+    .status-message.success { background: #eef9f0; }
+    .status-message.error { background: #ffecec; color: #c62828; }
+    textarea { width: 100%; box-sizing: border-box; padding: 10px; height: 260px; }
+    .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .btn { padding: 8px 14px; border: 1px solid #ddd; border-radius: 8px; background: white; cursor: pointer; }
+    .btn[disabled] { opacity: .5; cursor: not-allowed; }
+    .btn.primary { background: #1967d2; color: white; border-color: #1967d2; }
+    .btn.danger { background: #c62828; color: white; border-color: #c62828; }
+    .hint { color: #666; font-size: 13px; }
+    .llm-area { margin-top: 24px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #fafafa; padding: 12px; border-radius: 8px; border: 1px solid #eee; }
+  </style>
 </head>
-<body data-theme="blue">
-
+<body>
   <div class="container">
-    <!-- ヘッダー -->
-    <header class="header">
-      <div class="header-content">
-        <div class="logo">
-          <div class="logo-icon">
-            <i class="fas fa-microphone-alt"></i>
-          </div>
-          <div class="logo-text">
-            <h1>Gemini Live</h1>
-            <p class="logo-subtitle">リアルタイム文字起こし（コールセンター対応）</p>
-          </div>
-        </div>
-        <div class="header-actions">
-          <div class="theme-switcher">
-            <button class="theme-btn" data-theme="blue" title="Blue Theme">
-              <i class="fas fa-circle"></i>
-            </button>
-            <button class="theme-btn" data-theme="red" title="Red Theme">
-              <i class="fas fa-circle"></i>
-            </button>
-            <button class="theme-btn" data-theme="yellow" title="Yellow Theme">
-              <i class="fas fa-circle"></i>
-            </button>
-          </div>
-        </div>
-      </div>
-    </header>
+    <h1>Gemini Live リアルタイム文字起こし（コールセンター対応）</h1>
+    <div style="color: #666; font-size: 13px; margin-top: -4px; margin-bottom: 12px;">最終更新: 2025-11-14 (コラボス音声認識精度向上版)</div>
 
-    <!-- ステータスカードと担当者入力 -->
-    <div class="top-section">
-      <div class="status-card" id="statusCard">
-        <div class="status-icon-container">
-          <div class="status-icon" id="statusIcon">
-            <i class="fas fa-circle-notch"></i>
-          </div>
-        </div>
-        <div class="status-content">
-          <h3 class="status-title" id="statusTitle">準備完了</h3>
-          <p class="status-text" id="statusText">「文字起こし開始」ボタンをクリックしてください</p>
-        </div>
-      </div>
+    <div id="status" class="status-message">ステータス: 準備完了。「文字起こし開始」ボタンをクリックしてください。</div>
 
-      <div class="operator-card">
-        <div class="operator-icon">
-          <i class="fas fa-user-tie"></i>
-        </div>
-        <div class="operator-input-group">
-          <label for="operatorName" class="operator-label">担当者名</label>
-          <input
-            type="text"
-            id="operatorName"
-            class="operator-input"
-            placeholder="山田 太郎"
-          />
-        </div>
-      </div>
-    </div>
-
-    <!-- メインコントロール -->
-    <div class="control-grid">
-      <button id="start" class="control-card control-card-primary">
-        <div class="control-icon">
-          <i class="fas fa-microphone"></i>
-        </div>
-        <div class="control-label">文字起こし開始</div>
-      </button>
-
-      <button id="stop" class="control-card control-card-danger" disabled>
-        <div class="control-icon">
-          <i class="fas fa-stop"></i>
-        </div>
-        <div class="control-label">停止</div>
-      </button>
-
-      <button id="configDevices" class="control-card control-card-secondary">
-        <div class="control-icon">
-          <i class="fas fa-cog"></i>
-        </div>
-        <div class="control-label">デバイス設定</div>
-      </button>
-
-      <label class="control-card control-card-checkbox">
+    <div class="controls" style="margin-bottom: 12px;">
+      <button id="start" class="btn primary">🎤 文字起こし開始</button>
+      <button id="stop" class="btn danger" disabled>⏹ 停止</button>
+      <button id="configDevices" class="btn">⚙️ デバイス設定</button>
+      <label style="margin-left: 16px;">
         <input type="checkbox" id="useSystemAudio" checked>
-        <div class="checkbox-icon">
-          <i class="fas fa-check"></i>
-        </div>
-        <div class="control-label">システム音声（コラボス）も含める</div>
+        システム音声（コラボス）も含める
       </label>
+      <span class="hint">※ 初回のみデバイスを選択してください</span>
     </div>
 
-    <!-- オーディオデバッグパネル -->
-    <div id="audioDebug" class="audio-panel" style="display: none;">
-      <div class="panel-header">
-        <i class="fas fa-signal"></i>
-        <h3>音声入力情報</h3>
-      </div>
-
-      <div class="device-cards">
-        <div class="device-card">
-          <div class="device-icon operator">
-            <i class="fas fa-user"></i>
-          </div>
-          <div class="device-info">
-            <span class="device-label">オペレーター</span>
-            <span class="device-name" id="micInfo">マイク: 未接続</span>
-          </div>
+    <div id="audioDebug" style="margin: 12px 0; padding: 10px; background: #f0f0f0; border-radius: 8px; display: none;">
+      <div><strong>音声入力情報:</strong></div>
+      <div id="micInfo">マイク: 未接続</div>
+      <div id="sysInfo">システム音声: 未接続</div>
+      <div id="audioLevel" style="margin-top: 8px;">
+        <div style="font-size: 13px; color: #666; margin-bottom: 4px;">オペレーター（マイク）音量:</div>
+        <div style="height: 20px; background: #ddd; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+          <div id="micLevelBar" style="height: 100%; width: 0%; background: #1967d2; transition: width 0.1s;"></div>
         </div>
-
-        <div class="device-card">
-          <div class="device-icon customer">
-            <i class="fas fa-phone"></i>
-          </div>
-          <div class="device-info">
-            <span class="device-label">顧客（コラボス）</span>
-            <span class="device-name" id="sysInfo">システム音声: 未接続</span>
-          </div>
+        <div style="font-size: 13px; color: #666; margin-bottom: 4px;">顧客（コラボス）音量:</div>
+        <div style="height: 20px; background: #ddd; border-radius: 4px; overflow: hidden;">
+          <div id="sysLevelBar" style="height: 100%; width: 0%; background: #e91e63; transition: width 0.1s;"></div>
         </div>
-      </div>
-
-      <div class="audio-meters">
-        <div class="meter-item">
-          <div class="meter-header">
-            <span class="meter-label">
-              <i class="fas fa-user"></i>
-              オペレーター音量
-            </span>
-          </div>
-          <div class="meter-track">
-            <div class="meter-fill operator-meter" id="micLevelBar"></div>
-            <div class="meter-glow"></div>
-          </div>
-        </div>
-
-        <div class="meter-item">
-          <div class="meter-header">
-            <span class="meter-label">
-              <i class="fas fa-phone"></i>
-              顧客音量
-            </span>
-          </div>
-          <div class="meter-track">
-            <div class="meter-fill customer-meter" id="sysLevelBar"></div>
-            <div class="meter-glow"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="current-speaker" id="currentSpeaker">
-        <div class="speaker-indicator">
-          <i class="fas fa-user-circle"></i>
-        </div>
-        <span>現在の話者: --</span>
+        <div id="currentSpeaker" style="margin-top: 8px; font-weight: bold; color: #1967d2;">現在の話者: --</div>
       </div>
     </div>
 
-    <!-- 文字起こしエリア -->
-    <div class="transcript-section">
-      <div class="section-header">
-        <h2>
-          <i class="fas fa-file-alt"></i>
-          文字起こし結果
-        </h2>
-        <div class="section-actions">
-          <button id="clearTranscript" class="icon-btn" title="クリア">
-            <i class="fas fa-eraser"></i>
-          </button>
-          <button id="copyTranscript" class="icon-btn" title="コピー">
-            <i class="fas fa-copy"></i>
-          </button>
-        </div>
+    <textarea id="transcript" placeholder="ここにリアルタイムで文字起こしが表示されます..."></textarea>
+
+    <div class="llm-area">
+      <div class="controls">
+        <button id="summarize" class="btn" disabled>✨ 要約を生成</button>
+        <button id="terms" class="btn" disabled>✨ 専門用語をチェック</button>
+        <button id="saveSession" class="btn" disabled>💾 保存</button>
+        <button id="viewHistory" class="btn">📋 履歴を表示</button>
+        <span class="hint">（停止後に実行できます）</span>
       </div>
-      <div class="transcript-wrapper">
-        <textarea id="transcript" placeholder="ここにリアルタイムで文字起こしが表示されます..."></textarea>
-      </div>
+      <div id="llmOut" style="margin-top: 10px;"></div>
     </div>
 
-    <!-- 分析セクション -->
-    <div class="analysis-section">
-      <div class="section-header">
-        <span class="section-hint">停止後に実行できます</span>
-      </div>
-
-      <div class="action-grid">
-        <button id="summarize" class="action-card" disabled>
-          <div class="action-icon">
-            <i class="fas fa-magic"></i>
-          </div>
-          <span class="action-label">要約を生成</span>
-        </button>
-
-        <button id="terms" class="action-card" disabled>
-          <div class="action-icon">
-            <i class="fas fa-book"></i>
-          </div>
-          <span class="action-label">専門用語チェック</span>
-        </button>
-
-        <button id="saveSession" class="action-card" disabled>
-          <div class="action-icon">
-            <i class="fas fa-save"></i>
-          </div>
-          <span class="action-label">保存</span>
-        </button>
-
-        <button id="viewHistory" class="action-card">
-          <div class="action-icon">
-            <i class="fas fa-history"></i>
-          </div>
-          <span class="action-label">履歴を表示</span>
-        </button>
-      </div>
-
-      <div id="llmOut" class="analysis-output"></div>
-    </div>
-
-    <!-- 履歴モーダル -->
-    <div id="historyModal" class="modal">
-      <div class="modal-overlay"></div>
-      <div class="modal-container">
-        <div class="modal-header">
-          <h2>
-            <i class="fas fa-history"></i>
-            文字起こし履歴
-          </h2>
-          <button id="closeHistory" class="modal-close-btn">
-            <i class="fas fa-times"></i>
-          </button>
-        </div>
-        <div class="modal-body">
-          <div id="historyList"></div>
-        </div>
-        <div class="modal-footer">
-          <button id="closeHistoryBtn" class="btn btn-secondary">閉じる</button>
+    <!-- セッション履歴モーダル -->
+    <div id="historyModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+      <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 24px; border-radius: 12px; max-width: 800px; max-height: 80%; overflow-y: auto; width: 90%;">
+        <h2 style="margin-top: 0;">文字起こし履歴</h2>
+        <div id="historyList"></div>
+        <div style="margin-top: 16px; text-align: right;">
+          <button id="closeHistory" class="btn">閉じる</button>
         </div>
       </div>
     </div>
 
     <!-- デバイス設定モーダル -->
-    <div id="deviceModal" class="modal">
-      <div class="modal-overlay"></div>
-      <div class="modal-container">
-        <div class="modal-header">
-          <h2>
-            <i class="fas fa-cog"></i>
-            オーディオデバイス設定
-          </h2>
-          <button id="cancelDeviceConfig" class="modal-close-btn">
-            <i class="fas fa-times"></i>
-          </button>
+    <div id="deviceModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1001;">
+      <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 24px; border-radius: 12px; max-width: 600px; width: 90%;">
+        <h2 style="margin-top: 0;">オーディオデバイス設定</h2>
+        <p style="color: #666; font-size: 14px;">各音声入力デバイスを選択してください。設定は保存され、次回から自動的に使用されます。</p>
+
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-weight: bold; margin-bottom: 8px;">
+            オペレーター用マイク:
+          </label>
+          <select id="micDeviceSelect" class="btn" style="width: 100%; text-align: left;">
+            <option value="">デバイスを選択...</option>
+          </select>
         </div>
 
-        <div class="modal-body">
-          <p class="modal-description">
-            各音声入力デバイスを選択してください。設定は自動的に保存され、次回から自動的に使用されます。
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-weight: bold; margin-bottom: 8px;">
+            顧客音声用デバイス（コラボス/仮想オーディオケーブル）:
+          </label>
+          <select id="sysDeviceSelect" class="btn" style="width: 100%; text-align: left;">
+            <option value="">デバイスを選択...</option>
+            <option value="NONE">使用しない</option>
+          </select>
+          <p style="font-size: 12px; color: #666; margin-top: 4px;">
+            ※ VB-CABLEなどの仮想オーディオデバイスを選択してください
           </p>
-
-          <div class="form-group">
-            <label class="form-label">
-              <i class="fas fa-microphone"></i>
-              オペレーター用マイク
-            </label>
-            <select id="micDeviceSelect" class="form-select">
-              <option value="">デバイスを選択...</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">
-              <i class="fas fa-volume-up"></i>
-              顧客音声用デバイス（コラボス/仮想オーディオケーブル）
-            </label>
-            <select id="sysDeviceSelect" class="form-select">
-              <option value="">デバイスを選択...</option>
-              <option value="NONE">使用しない</option>
-            </select>
-            <p class="form-hint">
-              <i class="fas fa-info-circle"></i>
-              VB-CABLEなどの仮想オーディオデバイスを選択してください
-            </p>
-          </div>
         </div>
 
-        <div class="modal-footer">
-          <button id="resetDevices" class="btn btn-warning">
-            <i class="fas fa-redo"></i>
-            設定をリセット
-          </button>
-          <button class="btn btn-secondary" onclick="document.getElementById('deviceModal').style.display='none'">キャンセル</button>
-          <button id="saveDeviceConfig" class="btn btn-primary">
-            <i class="fas fa-check"></i>
-            保存
-          </button>
+        <div style="margin-top: 16px; text-align: right; display: flex; gap: 8px; justify-content: flex-end;">
+          <button id="resetDevices" class="btn" style="background: #ff9800; color: white; border-color: #ff9800;">設定をリセット</button>
+          <button id="cancelDeviceConfig" class="btn">キャンセル</button>
+          <button id="saveDeviceConfig" class="btn primary">保存</button>
         </div>
       </div>
     </div>
   </div>
 
-  <script type="module" src="js/main.js"></script>
+  <script type="module">
+    // ===== 設定 =====
+    const GEMINI_LIVE_ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
+    const API_KEY_ENDPOINT = '/api-key';                // APIキーサーバ
+    const TEXT_GEN_ENDPOINT = '/text-generate';         // テキスト生成プロキシ
+    const SAMPLE_RATE = 16000;
+    const CHUNK_SIZE = 2048; // ScriptProcessor のバッファ
+
+    // ===== DOM =====
+    const $status = document.getElementById('status');
+    const $start = document.getElementById('start');
+    const $stop = document.getElementById('stop');
+    const $txt = document.getElementById('transcript');
+    const $sum = document.getElementById('summarize');
+    const $terms = document.getElementById('terms');
+    const $out = document.getElementById('llmOut');
+    const $useSystemAudio = document.getElementById('useSystemAudio');
+    const $audioDebug = document.getElementById('audioDebug');
+    const $micInfo = document.getElementById('micInfo');
+    const $sysInfo = document.getElementById('sysInfo');
+    const $micLevelBar = document.getElementById('micLevelBar');
+    const $sysLevelBar = document.getElementById('sysLevelBar');
+    const $currentSpeaker = document.getElementById('currentSpeaker');
+    const $saveSession = document.getElementById('saveSession');
+    const $viewHistory = document.getElementById('viewHistory');
+    const $historyModal = document.getElementById('historyModal');
+    const $historyList = document.getElementById('historyList');
+    const $closeHistory = document.getElementById('closeHistory');
+    const $configDevices = document.getElementById('configDevices');
+    const $deviceModal = document.getElementById('deviceModal');
+    const $micDeviceSelect = document.getElementById('micDeviceSelect');
+    const $sysDeviceSelect = document.getElementById('sysDeviceSelect');
+    const $saveDeviceConfig = document.getElementById('saveDeviceConfig');
+    const $cancelDeviceConfig = document.getElementById('cancelDeviceConfig');
+    const $resetDevices = document.getElementById('resetDevices');
+
+    // ===== 状態 =====
+    let wsMic = null;         // マイク用WebSocket 接続
+    let wsSys = null;         // システム音声用WebSocket 接続
+    let audioContext = null;  // WebAudio
+    let micStream = null;     // マイク
+    let sysStream = null;     // システム音声（画面共有）
+    let micRecorder = null;   // マイク用ScriptProcessorNode
+    let sysRecorder = null;   // システム音声用ScriptProcessorNode
+    let currentSessionId = null; // 現在のセッションID
+    let autoSaveInterval = null; // 自動保存タイマー
+
+    // 話者判定
+    let micAnalyser = null;
+    let sysAnalyser = null;
+    let micDataArray = null;
+    let sysDataArray = null;
+    let levelMonitorInterval = null; // 音量モニタリング用のインターバル
+
+    // 現在の音量レベル（優先制御用）
+    let currentMicLevel = 0;
+    let currentSysLevel = 0;
+
+    // 文字起こし結果のマージ用
+    let transcriptBuffer = []; // {timestamp, speaker, text} の配列
+
+    // 音量レベルを計算（RMS値）
+    function calculateAudioLevel(analyser, dataArray) {
+      if (!analyser || !dataArray) return 0;
+      analyser.getByteTimeDomainData(dataArray);
+
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const normalized = (dataArray[i] - 128) / 128; // -1 to 1
+        sum += normalized * normalized;
+      }
+      const rms = Math.sqrt(sum / dataArray.length);
+      return rms;
+    }
+
+    // 音量レベルを監視（表示と優先制御用）
+    function monitorAudioLevels() {
+      const micLevel = calculateAudioLevel(micAnalyser, micDataArray);
+      const sysLevel = calculateAudioLevel(sysAnalyser, sysDataArray);
+
+      // グローバル変数に保存（音声送信の優先制御で使用）
+      currentMicLevel = micLevel;
+      currentSysLevel = sysLevel;
+
+      // UIの音量バーを更新（0-100%）
+      const micPercent = Math.min(100, micLevel * 200); // 倍率調整
+      const sysPercent = sysAnalyser && sysDataArray ? Math.min(100, sysLevel * 200) : 0;
+
+      $micLevelBar.style.width = micPercent + '%';
+      if (sysAnalyser) {
+        $sysLevelBar.style.width = sysPercent + '%';
+      }
+
+      // 両方が話している場合の表示
+      const threshold = 0.05;
+      const micActive = micLevel > threshold;
+      const sysActive = sysLevel > threshold;
+
+      if (micActive && sysActive) {
+        $currentSpeaker.textContent = '現在の話者: 両方が同時に発話中（コラボス優先）';
+        $currentSpeaker.style.color = '#ff9800';
+      } else if (micActive) {
+        $currentSpeaker.textContent = '現在の話者: オペレーター（マイク）';
+        $currentSpeaker.style.color = '#1967d2';
+      } else if (sysActive) {
+        $currentSpeaker.textContent = '現在の話者: 顧客（コラボス）';
+        $currentSpeaker.style.color = '#e91e63';
+      } else {
+        $currentSpeaker.textContent = '現在の話者: --';
+        $currentSpeaker.style.color = '#666';
+      }
+    }
+
+    // 音量モニタリングを開始
+    function startLevelMonitoring() {
+      if (levelMonitorInterval) return;
+      levelMonitorInterval = setInterval(monitorAudioLevels, 100); // 100msごとに更新
+      console.log('Audio level monitoring started');
+    }
+
+    // 音量モニタリングを停止
+    function stopLevelMonitoring() {
+      if (levelMonitorInterval) {
+        clearInterval(levelMonitorInterval);
+        levelMonitorInterval = null;
+        currentMicLevel = 0;
+        currentSysLevel = 0;
+        $currentSpeaker.textContent = '現在の話者: --';
+        $currentSpeaker.style.color = '#666';
+        $micLevelBar.style.width = '0%';
+        $sysLevelBar.style.width = '0%';
+        console.log('Audio level monitoring stopped');
+      }
+    }
+
+    // ===== 文字起こし結果のマージ =====
+    function addTranscript(speaker, text) {
+      const timestamp = Date.now();
+      transcriptBuffer.push({ timestamp, speaker, text });
+
+      // バッファをタイムスタンプ順にソート
+      transcriptBuffer.sort((a, b) => a.timestamp - b.timestamp);
+
+      // 表示を更新
+      updateTranscriptDisplay();
+    }
+
+    function updateTranscriptDisplay() {
+      // バッファの内容を結合して表示
+      let displayText = '';
+      for (const item of transcriptBuffer) {
+        const speakerLabel = item.speaker === 'operator' ? '[オペレーター] ' : '[顧客] ';
+        displayText += speakerLabel + item.text + '\n';
+      }
+      $txt.value = displayText;
+      $txt.scrollTop = $txt.scrollHeight;
+    }
+
+    // ===== セッション管理 =====
+    function createSession() {
+      currentSessionId = Date.now().toString();
+      const session = {
+        id: currentSessionId,
+        startTime: new Date().toISOString(),
+        transcript: '',
+        endTime: null
+      };
+      console.log('Created new session:', currentSessionId);
+      return session;
+    }
+
+    function saveCurrentSession() {
+      if (!currentSessionId) return;
+
+      const sessions = JSON.parse(localStorage.getItem('transcriptSessions') || '[]');
+      const existingIndex = sessions.findIndex(s => s.id === currentSessionId);
+
+      const session = {
+        id: currentSessionId,
+        startTime: existingIndex >= 0 ? sessions[existingIndex].startTime : new Date().toISOString(),
+        transcript: $txt.value,
+        endTime: new Date().toISOString(),
+        length: $txt.value.length
+      };
+
+      if (existingIndex >= 0) {
+        sessions[existingIndex] = session;
+      } else {
+        sessions.unshift(session);
+      }
+
+      // 最新50件のみ保存
+      const trimmedSessions = sessions.slice(0, 50);
+      localStorage.setItem('transcriptSessions', JSON.stringify(trimmedSessions));
+      console.log('Session saved:', currentSessionId);
+      setStatus('セッションを保存しました', 'success');
+    }
+
+    function startAutoSave() {
+      // 10秒ごとに自動保存
+      autoSaveInterval = setInterval(() => {
+        if ($txt.value.trim().length > 0) {
+          saveCurrentSession();
+          console.log('Auto-saved at', new Date().toLocaleTimeString());
+        }
+      }, 10000);
+    }
+
+    function stopAutoSave() {
+      if (autoSaveInterval) {
+        clearInterval(autoSaveInterval);
+        autoSaveInterval = null;
+      }
+    }
+
+    // ===== デバイス管理 =====
+    async function listAudioDevices() {
+      try {
+        // まず権限を取得
+        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tempStream.getTracks().forEach(t => t.stop());
+
+        // デバイス一覧を取得
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(d => d.kind === 'audioinput');
+        console.log('利用可能なマイクデバイス:', audioInputs);
+        return audioInputs;
+      } catch (e) {
+        console.error('デバイス列挙エラー:', e);
+        return [];
+      }
+    }
+
+    async function showDeviceConfig() {
+      const devices = await listAudioDevices();
+
+      if (devices.length === 0) {
+        alert('オーディオデバイスが見つかりません。マイクが接続されているか確認してください。');
+        return;
+      }
+
+      // デバイス選択肢を設定
+      $micDeviceSelect.innerHTML = '<option value="">デバイスを選択...</option>';
+      $sysDeviceSelect.innerHTML = '<option value="">デバイスを選択...</option><option value="NONE">使用しない</option>';
+
+      devices.forEach(device => {
+        const option1 = document.createElement('option');
+        option1.value = device.deviceId;
+        option1.textContent = device.label || `マイク ${device.deviceId.substring(0, 8)}`;
+        $micDeviceSelect.appendChild(option1);
+
+        const option2 = document.createElement('option');
+        option2.value = device.deviceId;
+        option2.textContent = device.label || `マイク ${device.deviceId.substring(0, 8)}`;
+        $sysDeviceSelect.appendChild(option2);
+      });
+
+      // 保存された設定を読み込み
+      const savedMicDeviceId = localStorage.getItem('micDeviceId');
+      const savedSysDeviceId = localStorage.getItem('sysDeviceId');
+
+      if (savedMicDeviceId) $micDeviceSelect.value = savedMicDeviceId;
+      if (savedSysDeviceId) $sysDeviceSelect.value = savedSysDeviceId;
+
+      $deviceModal.style.display = 'block';
+    }
+
+    function saveDeviceConfig() {
+      const micDeviceId = $micDeviceSelect.value;
+      const sysDeviceId = $sysDeviceSelect.value;
+
+      if (!micDeviceId) {
+        alert('オペレーター用マイクを選択してください。');
+        return;
+      }
+
+      localStorage.setItem('micDeviceId', micDeviceId);
+
+      if (sysDeviceId && sysDeviceId !== 'NONE') {
+        localStorage.setItem('sysDeviceId', sysDeviceId);
+        $useSystemAudio.checked = true;
+      } else {
+        localStorage.removeItem('sysDeviceId');
+        $useSystemAudio.checked = false;
+      }
+
+      $deviceModal.style.display = 'none';
+      setStatus('デバイス設定を保存しました。', 'success');
+    }
+
+    function resetDeviceConfig() {
+      if (!confirm('デバイス設定をリセットしますか？次回起動時に再度選択が必要になります。')) return;
+
+      localStorage.removeItem('micDeviceId');
+      localStorage.removeItem('sysDeviceId');
+      $deviceModal.style.display = 'none';
+      setStatus('デバイス設定をリセットしました。', 'success');
+    }
+
+    function hideDeviceConfig() {
+      $deviceModal.style.display = 'none';
+    }
+
+    // 初回起動時にデバイス設定を確認
+    async function checkDeviceConfig() {
+      const micDeviceId = localStorage.getItem('micDeviceId');
+
+      if (!micDeviceId) {
+        // 初回起動時は設定を促す
+        setStatus('初回起動です。「デバイス設定」ボタンから使用するマイクを選択してください。', 'error');
+        return false;
+      }
+      return true;
+    }
+
+    function setStatus(msg, type='') {
+      $status.textContent = `ステータス: ${msg}`;
+      $status.className = `status-message ${type}`.trim();
+    }
+    function updateButtons(running) {
+      $start.disabled = running;
+      $stop.disabled = !running;
+      const hasText = ($txt.value.trim().length > 0);
+      $sum.disabled = running || !hasText;
+      $terms.disabled = running || !hasText;
+      $saveSession.disabled = running || !hasText;
+    }
+
+    async function fetchApiKey() {
+      const res = await fetch(API_KEY_ENDPOINT, { method: 'POST' });
+      if (!res.ok) throw new Error(`APIキー取得に失敗: ${res.status}`);
+      const { apiKey } = await res.json();
+      if (!apiKey) throw new Error('APIキーレスポンスが不正');
+      return apiKey;
+    }
+
+    // 個別のWebSocket接続をセットアップ
+    async function setupWebSocket(apiKey, speaker) {
+      const url = `${GEMINI_LIVE_ENDPOINT}?key=${encodeURIComponent(apiKey)}`;
+      const ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
+
+      return new Promise((resolve, reject) => {
+        ws.onopen = async () => {
+          console.log(`WebSocket opened for ${speaker}`);
+
+          // セットアップメッセージを送信
+          const init = {
+            setup: {
+              model: 'models/gemini-2.0-flash-live-001',
+              generationConfig: {
+                responseModalities: ['TEXT'],
+              },
+              systemInstruction: {
+                parts: [{
+                  text: 'あなたはユーザーの音声入力を厳密に文字起こしするエンジンです。句読点含め正確な日本語で書き起こしてください。応答や要約はしないでください。'
+                }]
+              }
+            }
+          };
+          console.log(`Sending setup for ${speaker}:`, JSON.stringify(init, null, 2));
+          ws.send(JSON.stringify(init));
+        };
+
+        let setupComplete = false;
+
+        ws.onmessage = (ev) => {
+          let messageText;
+          if (ev.data instanceof ArrayBuffer) {
+            const decoder = new TextDecoder('utf-8');
+            messageText = decoder.decode(ev.data);
+          } else {
+            messageText = ev.data;
+          }
+
+          try {
+            const data = JSON.parse(messageText);
+            console.log(`Received message for ${speaker}:`, JSON.stringify(data, null, 2));
+
+            if (data.error) {
+              console.error(`Server error for ${speaker}:`, data.error);
+              setStatus(`サーバーエラー (${speaker}): ${JSON.stringify(data.error)}`, 'error');
+            }
+
+            if (data.setupComplete && !setupComplete) {
+              console.log(`Setup complete for ${speaker}`);
+              setupComplete = true;
+              resolve({ ws, setupComplete: true });
+            }
+
+            // 文字起こし結果を処理
+            if (data.serverContent) {
+              const text = data.serverContent.modelTurn?.parts?.[0]?.text;
+              if (text) {
+                console.log(`%c[${speaker}] ✅ Transcription received: "${text}"`, 'color: green; font-weight: bold');
+                addTranscript(speaker, text);
+              } else {
+                // serverContentはあるがtextがない場合
+                console.log(`[${speaker}] ⚠️ serverContent received but no text:`, JSON.stringify(data.serverContent).substring(0, 200));
+              }
+            }
+          } catch (err) {
+            console.warn(`Message parse error for ${speaker}:`, err, 'Data:', ev.data);
+          }
+        };
+
+        ws.onerror = (err) => {
+          console.error(`WebSocket error for ${speaker}`, err);
+          reject(err);
+        };
+
+        ws.onclose = (ev) => {
+          console.warn(`WS closed for ${speaker}:`, {code: ev.code, reason: ev.reason});
+        };
+      });
+    }
+
+    // 音声処理パイプラインをセットアップ
+    function setupAudioProcessor(stream, ws, speaker, channelCount = 1) {
+      console.log(`[${speaker}] Setting up audio processor...`);
+      console.log(`[${speaker}] Stream tracks:`, stream.getAudioTracks());
+      console.log(`[${speaker}] WebSocket state:`, ws?.readyState);
+
+      const source = audioContext.createMediaStreamSource(stream);
+      console.log(`[${speaker}] MediaStreamSource created`);
+
+      // 入力音声の増幅用ゲインノードを追加
+      // customerの場合は音量を増幅して認識精度を向上
+      const inputGainNode = audioContext.createGain();
+      if (speaker === 'customer') {
+        inputGainNode.gain.value = 1.5; // コラボス音声を1.5倍に増幅（クリッピング防止）
+        console.log(`[${speaker}] Input gain set to 1.5x for better recognition`);
+      } else {
+        inputGainNode.gain.value = 1.0; // オペレーターは通常の音量
+      }
+      source.connect(inputGainNode);
+
+      let recorder;
+      try {
+        recorder = audioContext.createScriptProcessor(CHUNK_SIZE, channelCount, 1);
+        console.log(`[${speaker}] ScriptProcessor created with CHUNK_SIZE=${CHUNK_SIZE}`);
+      } catch (e) {
+        recorder = audioContext.createScriptProcessor(2048, channelCount, 1);
+        console.log(`[${speaker}] ScriptProcessor created with fallback size=2048`);
+      }
+
+      inputGainNode.connect(recorder);
+      console.log(`[${speaker}] InputGain connected to recorder`);
+
+      // ScriptProcessorNodeを動作させるためにdestinationに接続が必要
+      // ただし、音を出さないようにゲインを0に設定
+      const gainNode = audioContext.createGain();
+      gainNode.gain.value = 0; // 音量を0にして無音化
+      recorder.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      console.log(`[${speaker}] Connected to destination with zero gain (silent)`);
+
+      let audioChunkCount = 0;
+      recorder.onaudioprocess = (e) => {
+        if (audioChunkCount === 0) {
+          console.log(`[${speaker}] onaudioprocess called for first time`);
+        }
+
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          if (audioChunkCount === 0) {
+            console.warn(`[${speaker}] WebSocket not ready. State: ${ws?.readyState}`);
+          }
+          return;
+        }
+
+        // コラボス優先制御: オペレーター(operator)の場合、コラボス(customer)が話していたら送信をスキップ
+        // API側で同時発話を認識できないため、顧客音声を優先します
+        const PRIORITY_THRESHOLD = 0.03; // 話者判定の閾値（調整済み）
+        if (speaker === 'operator' && currentSysLevel > PRIORITY_THRESHOLD) {
+          // コラボスが話している間はオペレーターの音声送信をスキップ
+          return;
+        }
+
+        const inputChannels = e.inputBuffer.numberOfChannels;
+        const len = e.inputBuffer.length;
+        const pcm16 = new Int16Array(len);
+
+        // ステレオの場合は両チャンネルをミックス、モノラルの場合はそのまま使用
+        let maxAmplitude = 0;
+        if (inputChannels === 2) {
+          const ch0 = e.inputBuffer.getChannelData(0);
+          const ch1 = e.inputBuffer.getChannelData(1);
+          for (let i = 0; i < len; i++) {
+            const mixed = (ch0[i] + ch1[i]) / 2;  // 両チャンネルをミックス
+            const s = Math.max(-1, Math.min(1, mixed));
+            pcm16[i] = (s * 0x7fff) | 0;
+            maxAmplitude = Math.max(maxAmplitude, Math.abs(s));
+          }
+          if (audioChunkCount === 0) {
+            console.log(`[${speaker}] Stereo audio detected, mixing both channels`);
+          }
+        } else {
+          const ch0 = e.inputBuffer.getChannelData(0);
+          for (let i = 0; i < len; i++) {
+            const s = Math.max(-1, Math.min(1, ch0[i]));
+            pcm16[i] = (s * 0x7fff) | 0;
+            maxAmplitude = Math.max(maxAmplitude, Math.abs(s));
+          }
+          if (audioChunkCount === 0) {
+            console.log(`[${speaker}] Mono audio detected`);
+          }
+        }
+
+        // 無音検出を一時的に無効化（デバッグ用）
+        // const silenceThreshold = speaker === 'customer' ? 0.001 : 0.005;
+        // if (maxAmplitude < silenceThreshold) {
+        //   // 完全な無音なので送信をスキップ
+        //   return;
+        // }
+
+        // 音声データをbase64エンコードして送信
+        const uint8Array = new Uint8Array(pcm16.buffer);
+        let binary = '';
+        for (let i = 0; i < uint8Array.byteLength; i++) {
+          binary += String.fromCharCode(uint8Array[i]);
+        }
+        const base64Audio = btoa(binary);
+
+        const audioMsg = {
+          realtimeInput: {
+            audio: {
+              mimeType: 'audio/pcm;rate=16000',
+              data: base64Audio
+            }
+          }
+        };
+        ws.send(JSON.stringify(audioMsg));
+
+        audioChunkCount++;
+        // デバッグ: 最初の10チャンクと100チャンクごとに詳細ログを出力
+        if (audioChunkCount <= 10 || audioChunkCount % 50 === 0) {
+          console.log(`[${speaker}] 📤 Sent chunk #${audioChunkCount}: size=${pcm16.buffer.byteLength}B, maxAmp=${maxAmplitude.toFixed(4)}, wsState=${ws.readyState}`);
+        }
+
+        // customerの場合、音声データが送信されていることを強調表示
+        if (speaker === 'customer' && audioChunkCount % 10 === 0) {
+          console.log(`%c[customer] 🔊 Audio streaming active: chunk ${audioChunkCount}, amplitude: ${maxAmplitude.toFixed(4)}`, 'color: #e91e63; font-weight: bold');
+        }
+      };
+
+      return { source, recorder, gainNode, inputGainNode };
+    }
+
+async function startTranscription() {
+  // デバイス設定を確認
+  const hasConfig = await checkDeviceConfig();
+  if (!hasConfig) {
+    alert('まず「デバイス設定」ボタンから使用するマイクを選択してください。');
+    return;
+  }
+
+  setStatus('音声ストリーム取得中...');
+  updateButtons(true);
+  $out.innerHTML = '';
+  $txt.value = '';
+  transcriptBuffer = []; // バッファをクリア
+
+  // 新しいセッションを作成
+  createSession();
+  startAutoSave();
+  console.log('Auto-save enabled: 別タブで作業中でも10秒ごとに自動保存されます');
+
+  try {
+    // デバッグ情報を表示
+    $audioDebug.style.display = 'block';
+
+    const useSystemAudio = $useSystemAudio.checked;
+
+    // 保存されたデバイスIDを取得
+    const savedMicDeviceId = localStorage.getItem('micDeviceId');
+    const savedSysDeviceId = localStorage.getItem('sysDeviceId');
+
+    // 1) オペレーター用マイクを取得
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: savedMicDeviceId } },
+      video: false
+    });
+
+    // マイク情報を表示
+    const micTrack = micStream.getAudioTracks()[0];
+    $micInfo.textContent = `マイク: ${micTrack.label || '接続済み'} (デバイスID: ${micTrack.id.substring(0, 8)}...)`;
+    console.log('Microphone track:', micTrack);
+
+    // 2) 顧客音声用デバイスを取得（オプション）
+    if (useSystemAudio && savedSysDeviceId) {
+      setStatus('マイク取得完了。顧客音声用デバイスを取得中...');
+      console.log(`%c🔍 Attempting to get customer audio device: ${savedSysDeviceId}`, 'color: purple; font-weight: bold');
+      try {
+        sysStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: { exact: savedSysDeviceId },
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          },
+          video: false
+        });
+
+        const sysTrack = sysStream.getAudioTracks()[0];
+        $sysInfo.textContent = `システム音声: ${sysTrack.label || '接続済み'}`;
+        console.log(`%c✅ System audio track acquired successfully:`, 'color: green; font-weight: bold', {
+          label: sysTrack.label,
+          id: sysTrack.id,
+          enabled: sysTrack.enabled,
+          muted: sysTrack.muted,
+          readyState: sysTrack.readyState,
+          settings: sysTrack.getSettings()
+        });
+      } catch (e) {
+        console.error('%c❌ 顧客音声用デバイスの取得に失敗:', 'color: red; font-weight: bold', e);
+        setStatus('顧客音声用デバイスの取得に失敗しました。マイクのみで続行します。');
+        $sysInfo.textContent = 'システム音声: 取得失敗';
+        sysStream = null;
+      }
+    } else {
+      console.log(`ℹ️ System audio disabled. useSystemAudio=${useSystemAudio}, savedSysDeviceId=${savedSysDeviceId}`);
+      $sysInfo.textContent = 'システム音声: 使用しない';
+    }
+
+    // 3) WebAudio 準備（16kHz）
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+
+    // マイク用のAnalyserNodeを作成
+    const micSrc = audioContext.createMediaStreamSource(micStream);
+    micAnalyser = audioContext.createAnalyser();
+    micAnalyser.fftSize = 256;
+    micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
+    micSrc.connect(micAnalyser);
+
+    // システム音声用のAnalyserNodeを作成
+    if (sysStream && sysStream.getAudioTracks().length > 0) {
+      console.log('%c🔊 Setting up system audio analyser...', 'color: purple; font-weight: bold');
+      const sysSrc = audioContext.createMediaStreamSource(sysStream);
+      sysAnalyser = audioContext.createAnalyser();
+      sysAnalyser.fftSize = 256;
+      sysDataArray = new Uint8Array(sysAnalyser.frequencyBinCount);
+      sysSrc.connect(sysAnalyser);
+      console.log('%c✅ System audio analyser connected', 'color: green; font-weight: bold');
+    } else {
+      console.log('%c⚠️ System audio analyser NOT created (no stream)', 'color: orange; font-weight: bold');
+    }
+
+    // 4) APIキーを取得
+    const apiKey = await fetchApiKey();
+
+    // 5) マイク用のWebSocket接続を作成
+    setStatus('マイク用の接続を作成中...', 'success');
+    const { ws: micWs } = await setupWebSocket(apiKey, 'operator');
+    wsMic = micWs;
+
+    // 6) システム音声用のWebSocket接続を作成（オプション）
+    if (sysStream && sysStream.getAudioTracks().length > 0) {
+      setStatus('システム音声用の接続を作成中...', 'success');
+      console.log('%c🌐 Creating WebSocket for customer audio...', 'color: purple; font-weight: bold');
+      const { ws: sysWs } = await setupWebSocket(apiKey, 'customer');
+      wsSys = sysWs;
+      console.log('%c✅ Customer WebSocket created, readyState:', 'color: green; font-weight: bold', wsSys.readyState);
+    } else {
+      console.log('%c⚠️ Skipping customer WebSocket (no stream)', 'color: orange; font-weight: bold');
+    }
+
+    // 7) AudioContextを再開
+    try { await audioContext.resume(); } catch {}
+
+    // 8) マイク用の音声処理パイプラインをセットアップ
+    const { recorder: micRec } = setupAudioProcessor(micStream, wsMic, 'operator');
+    micRecorder = micRec;
+
+    // 9) システム音声用の音声処理パイプラインをセットアップ
+    if (sysStream && sysStream.getAudioTracks().length > 0) {
+      console.log('%c🎙️ Setting up customer audio processor...', 'color: purple; font-weight: bold');
+      const { recorder: sysRec } = setupAudioProcessor(sysStream, wsSys, 'customer');
+      sysRecorder = sysRec;
+      console.log('%c✅ Customer audio processor ready', 'color: green; font-weight: bold');
+    } else {
+      console.log('%c⚠️ Skipping customer audio processor (no stream)', 'color: orange; font-weight: bold');
+    }
+
+    // 10) 音量レベル監視を開始
+    startLevelMonitoring();
+
+    setStatus('文字起こしを開始しました。2つの音声ソースが独立して処理されます。', 'success');
+  } catch (e) {
+    console.error('startTranscription error', e);
+    const msg = (e?.name === 'NotAllowedError' || e?.name === 'NotFoundError')
+      ? '権限エラー: マイクへのアクセス許可が必要です。ページを再読み込みして許可してください。'
+      : `初期化エラー: ${e?.message || e}`;
+    setStatus(msg, 'error');
+    updateButtons(false);
+  }
+}
+
+    function stopTranscription() {
+      setStatus('停止処理中...');
+
+      // 自動保存を停止して最終保存
+      stopAutoSave();
+      if ($txt.value.trim().length > 0) {
+        saveCurrentSession();
+      }
+
+      // 音量モニタリングを停止
+      stopLevelMonitoring();
+
+      // WebSocket接続を閉じる
+      try { wsMic?.close(1000, 'user close'); } catch(_){}
+      wsMic = null;
+      try { wsSys?.close(1000, 'user close'); } catch(_){}
+      wsSys = null;
+
+      // Audio processors
+      try { micRecorder?.disconnect(); } catch(_){}
+      micRecorder = null;
+      try { sysRecorder?.disconnect(); } catch(_){}
+      sysRecorder = null;
+
+      try { audioContext?.close(); } catch(_){}
+      audioContext = null;
+
+      try { micStream?.getTracks().forEach(t => t.stop()); } catch(_){}
+      micStream = null;
+
+      try { sysStream?.getTracks().forEach(t => t.stop()); } catch(_){}
+      sysStream = null;
+
+      // AnalyserNodeをクリア
+      micAnalyser = null;
+      sysAnalyser = null;
+      micDataArray = null;
+      sysDataArray = null;
+
+      // デバッグ情報を非表示
+      $audioDebug.style.display = 'none';
+      $micInfo.textContent = 'マイク: 未接続';
+      $sysInfo.textContent = 'システム音声: 未接続';
+
+      setStatus('停止完了。文字起こし結果を自動保存しました。分析機能を使えます。', 'success');
+      updateButtons(false);
+    }
+
+    async function callTextGen(systemInstruction, userQuery, model = 'gemini-2.0-flash-exp') {
+      const payload = { systemInstruction, userQuery, model };
+      console.log('Calling text generation API:', TEXT_GEN_ENDPOINT);
+      console.log('Payload:', payload);
+
+      try {
+        const res = await fetch(TEXT_GEN_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        console.log('Response status:', res.status);
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          console.error('Error response:', errorText);
+          throw new Error(`テキスト生成に失敗: ${res.status} - ${errorText.substring(0, 200)}`);
+        }
+
+        const data = await res.json();
+        console.log('Response data:', data);
+        return data.text || '';
+      } catch (e) {
+        console.error('Text generation error:', e);
+        throw e;
+      }
+    }
+
+    async function summarize() {
+      const t = $txt.value.trim();
+      if (!t) {
+        alert('文字起こしテキストが空です。');
+        return;
+      }
+      $sum.disabled = $terms.disabled = true;
+      $out.innerHTML = '<pre>✨ 要約を生成中...</pre>';
+      try {
+        const sys = 'あなたはプロのサマライザーです。提供された日本語の会議または会話の文字起こしを読み、主要な論点、決定事項、次のステップを含む簡潔な箇条書きの要約を日本語で作成してください。';
+        const uq = `以下の文字起こしを要約してください:\n\n---\n${t}`;
+        console.log('Starting summarization...');
+        const text = await callTextGen(sys, uq);
+        $out.innerHTML = `<h3>要約結果</h3><pre>${text}</pre>`;
+        setStatus('要約が完了しました。', 'success');
+      } catch (e) {
+        console.error('Summarization error:', e);
+        const errorMsg = e?.message || String(e);
+        $out.innerHTML = `<pre style="color:#c62828">要約エラー: ${errorMsg}\n\nブラウザのコンソール（F12）で詳細を確認してください。</pre>`;
+        setStatus('要約に失敗しました。コンソールを確認してください。', 'error');
+      } finally {
+        updateButtons(false);
+      }
+    }
+
+    async function terms() {
+      const t = $txt.value.trim();
+      if (!t) {
+        alert('文字起こしテキストが空です。');
+        return;
+      }
+      $sum.disabled = $terms.disabled = true;
+      $out.innerHTML = '<pre>✨ 専門用語を分析中...</pre>';
+      try {
+        const sys = 'あなたは学術的なアシスタントです。提供された日本語のテキストから、専門的/技術的な用語を最大5つ抽出し、非専門家にも分かる簡潔で正確な日本語の説明を出力してください。出力は「【用語】: 説明文」の箇条書き。';
+        const uq = `以下の文字起こしから専門用語を抽出し、説明してください:\n\n---\n${t}`;
+        console.log('Starting term extraction...');
+        const text = await callTextGen(sys, uq);
+        $out.innerHTML = `<h3>専門用語分析結果</h3><pre>${text}</pre>`;
+        setStatus('専門用語分析が完了しました。', 'success');
+      } catch (e) {
+        console.error('Term extraction error:', e);
+        const errorMsg = e?.message || String(e);
+        $out.innerHTML = `<pre style="color:#c62828">専門用語分析エラー: ${errorMsg}\n\nブラウザのコンソール（F12）で詳細を確認してください。</pre>`;
+        setStatus('専門用語分析に失敗しました。コンソールを確認してください。', 'error');
+      } finally {
+        updateButtons(false);
+      }
+    }
+
+    // ===== 履歴表示 =====
+    function showHistory() {
+      const sessions = JSON.parse(localStorage.getItem('transcriptSessions') || '[]');
+
+      if (sessions.length === 0) {
+        $historyList.innerHTML = '<p style="color: #666;">保存されたセッションはありません。</p>';
+      } else {
+        let html = '<div style="display: flex; flex-direction: column; gap: 12px;">';
+        sessions.forEach((session, index) => {
+          const startDate = new Date(session.startTime);
+          const endDate = session.endTime ? new Date(session.endTime) : null;
+          const duration = endDate ? Math.round((endDate - startDate) / 1000) : null;
+
+          html += `
+            <div style="border: 1px solid #ddd; padding: 12px; border-radius: 8px; background: #fafafa;">
+              <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                <div>
+                  <strong>セッション ${index + 1}</strong>
+                  <div style="font-size: 13px; color: #666;">
+                    ${startDate.toLocaleString('ja-JP')}
+                    ${duration ? `(${duration}秒)` : ''}
+                  </div>
+                </div>
+                <div>
+                  <button class="btn" style="font-size: 12px; padding: 4px 8px;" onclick="loadSession('${session.id}')">読み込み</button>
+                  <button class="btn" style="font-size: 12px; padding: 4px 8px;" onclick="deleteSession('${session.id}')">削除</button>
+                </div>
+              </div>
+              <div style="font-size: 13px; color: #666; margin-bottom: 4px;">
+                文字数: ${session.length || session.transcript.length}文字
+              </div>
+              <div style="max-height: 100px; overflow-y: auto; background: white; padding: 8px; border-radius: 4px; font-size: 13px;">
+                ${session.transcript.substring(0, 200)}${session.transcript.length > 200 ? '...' : ''}
+              </div>
+            </div>
+          `;
+        });
+        html += '</div>';
+        $historyList.innerHTML = html;
+      }
+
+      $historyModal.style.display = 'block';
+    }
+
+    function hideHistory() {
+      $historyModal.style.display = 'none';
+    }
+
+    // グローバルスコープに公開（onclick属性で使用）
+    window.loadSession = function(sessionId) {
+      const sessions = JSON.parse(localStorage.getItem('transcriptSessions') || '[]');
+      const session = sessions.find(s => s.id === sessionId);
+      if (session) {
+        $txt.value = session.transcript;
+        updateButtons(false);
+        hideHistory();
+        setStatus('セッションを読み込みました', 'success');
+      }
+    };
+
+    window.deleteSession = function(sessionId) {
+      if (!confirm('このセッションを削除しますか？')) return;
+
+      const sessions = JSON.parse(localStorage.getItem('transcriptSessions') || '[]');
+      const filtered = sessions.filter(s => s.id !== sessionId);
+      localStorage.setItem('transcriptSessions', JSON.stringify(filtered));
+      showHistory(); // 再表示
+      setStatus('セッションを削除しました', 'success');
+    };
+
+    // ===== イベント =====
+    $start.addEventListener('click', startTranscription);
+    $stop.addEventListener('click', stopTranscription);
+    $sum.addEventListener('click', summarize);
+    $terms.addEventListener('click', terms);
+    $saveSession.addEventListener('click', saveCurrentSession);
+    $viewHistory.addEventListener('click', showHistory);
+    $closeHistory.addEventListener('click', hideHistory);
+    $configDevices.addEventListener('click', showDeviceConfig);
+    $saveDeviceConfig.addEventListener('click', saveDeviceConfig);
+    $cancelDeviceConfig.addEventListener('click', hideDeviceConfig);
+    $resetDevices.addEventListener('click', resetDeviceConfig);
+
+    // モーダルの背景クリックで閉じる
+    $historyModal.addEventListener('click', (e) => {
+      if (e.target === $historyModal) hideHistory();
+    });
+
+    $deviceModal.addEventListener('click', (e) => {
+      if (e.target === $deviceModal) hideDeviceConfig();
+    });
+
+    // 初期化
+    updateButtons(false);
+    checkDeviceConfig();
+  </script>
 </body>
 </html>
