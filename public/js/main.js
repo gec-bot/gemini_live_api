@@ -1,7 +1,7 @@
 // ===== 設定 =====
 const GEMINI_LIVE_ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
-const API_KEY_ENDPOINT = '/api-key';
-const TEXT_GEN_ENDPOINT = '/text-generate';
+const API_KEY_ENDPOINT = 'http://localhost:3000/api-key';
+const TEXT_GEN_ENDPOINT = 'http://localhost:3000/text-generate';
 const SAMPLE_RATE = 16000;
 const CHUNK_SIZE = 2048;
 
