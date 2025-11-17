@@ -194,7 +194,13 @@ function addTranscript(speaker, text) {
 function updateTranscriptDisplay() {
   let displayText = '';
   for (const item of transcriptBuffer) {
-    const speakerLabel = item.speaker === 'operator' ? '[オペレーター] ' : '[顧客] ';
+    let speakerLabel;
+    if (item.speaker === 'operator') {
+      const operatorName = $operatorName.value.trim();
+      speakerLabel = operatorName ? `[${operatorName}] ` : '[オペレーター] ';
+    } else {
+      speakerLabel = '[顧客] ';
+    }
     displayText += speakerLabel + item.text + '\n';
   }
   $txt.value = displayText;
@@ -956,7 +962,13 @@ $cancelDeviceConfig.addEventListener('click', hideDeviceConfig);
 $resetDevices.addEventListener('click', resetDeviceConfig);
 $clearTranscript.addEventListener('click', clearTranscript);
 $copyTranscript.addEventListener('click', copyTranscript);
-$operatorName.addEventListener('input', saveOperatorName);
+$operatorName.addEventListener('input', () => {
+  saveOperatorName();
+  // 担当者名が変更されたら文字起こし結果の表示も更新
+  if (transcriptBuffer.length > 0) {
+    updateTranscriptDisplay();
+  }
+});
 
 // モーダルの背景クリックで閉じる
 $historyModal.addEventListener('click', (e) => {
