@@ -57,6 +57,18 @@ let currentMicLevel = 0;
 let currentSysLevel = 0;
 let transcriptBuffer = [];
 
+// デバッグ用：音声送信とトランスクリプション受信の追跡
+let lastMicSendTime = 0;
+let lastSysSendTime = 0;
+let lastMicTranscriptTime = 0;
+let lastSysTranscriptTime = 0;
+let micChunksSent = 0;
+let sysChunksSent = 0;
+let micTranscriptsReceived = 0;
+let sysTranscriptsReceived = 0;
+let lastMicActivityTime = 0;
+let lastSysActivityTime = 0;
+
 // ===== ステータス管理 =====
 function setStatus(text, description = '', type = 'ready') {
   const iconMap = {
@@ -134,7 +146,7 @@ function monitorAudioLevels() {
   let iconClass = 'fa-user-circle';
 
   if (micActive && sysActive) {
-    speakerText = '両方が同時に発話中';
+    speakerText = '両方が同時に発話中（顧客優先）';
     $currentSpeaker.style.color = '#ff9800';
     iconClass = 'fa-users';
   } else if (micActive) {
@@ -160,8 +172,31 @@ function monitorAudioLevels() {
 
 function startLevelMonitoring() {
   if (levelMonitorInterval) return;
-  levelMonitorInterval = setInterval(monitorAudioLevels, 100);
-  console.log('Audio level monitoring started');
+  levelMonitorInterval = setInterval(() => {
+    monitorAudioLevels();
+
+    // 定期的な状態チェック（10秒ごと）
+    const now = Date.now();
+    if (now % 10000 < 100) {
+      const micTimeSinceLastSend = lastMicSendTime > 0 ? (now - lastMicSendTime) / 1000 : 0;
+      const sysTimeSinceLastSend = lastSysSendTime > 0 ? (now - lastSysSendTime) / 1000 : 0;
+      const micTimeSinceLastTranscript = lastMicTranscriptTime > 0 ? (now - lastMicTranscriptTime) / 1000 : 0;
+      const sysTimeSinceLastTranscript = lastSysTranscriptTime > 0 ? (now - lastSysTranscriptTime) / 1000 : 0;
+
+      console.log(`%c📊 Status Check:`, 'color: cyan; font-weight: bold');
+      console.log(`  [Operator] Sent: ${micChunksSent} chunks, Received: ${micTranscriptsReceived} transcripts, Last send: ${micTimeSinceLastSend.toFixed(1)}s ago, Last transcript: ${micTimeSinceLastTranscript.toFixed(1)}s ago`);
+      console.log(`  [Customer] Sent: ${sysChunksSent} chunks, Received: ${sysTranscriptsReceived} transcripts, Last send: ${sysTimeSinceLastSend.toFixed(1)}s ago, Last transcript: ${sysTimeSinceLastTranscript.toFixed(1)}s ago`);
+
+      // 警告：音声送信しているがトランスクリプションが長時間来ない
+      if (lastMicActivityTime > 0 && (now - lastMicActivityTime) < 5000 && (now - lastMicTranscriptTime) > 15000 && micChunksSent > 100) {
+        console.warn(`%c⚠️ [Operator] Audio being sent but no transcription for ${micTimeSinceLastTranscript.toFixed(1)}s`, 'color: orange; font-weight: bold');
+      }
+      if (lastSysActivityTime > 0 && (now - lastSysActivityTime) < 5000 && (now - lastSysTranscriptTime) > 15000 && sysChunksSent > 100) {
+        console.warn(`%c⚠️ [Customer] Audio being sent but no transcription for ${sysTimeSinceLastTranscript.toFixed(1)}s`, 'color: orange; font-weight: bold');
+      }
+    }
+  }, 100);
+  console.log('Audio level monitoring started with status tracking');
 }
 
 function stopLevelMonitoring() {
@@ -404,7 +439,18 @@ async function setupWebSocket(apiKey, speaker) {
         if (data.serverContent) {
           const text = data.serverContent.modelTurn?.parts?.[0]?.text;
           if (text) {
-            console.log(`%c[${speaker}] ✅ Transcription received: "${text}"`, 'color: green; font-weight: bold');
+            const now = Date.now();
+            if (speaker === 'operator') {
+              lastMicTranscriptTime = now;
+              micTranscriptsReceived++;
+              const timeSinceLastSend = lastMicSendTime > 0 ? now - lastMicSendTime : 0;
+              console.log(`%c[${speaker}] ✅ Transcription #${micTranscriptsReceived} received: "${text}" (${timeSinceLastSend}ms since last send)`, 'color: green; font-weight: bold');
+            } else {
+              lastSysTranscriptTime = now;
+              sysTranscriptsReceived++;
+              const timeSinceLastSend = lastSysSendTime > 0 ? now - lastSysSendTime : 0;
+              console.log(`%c[${speaker}] ✅ Transcription #${sysTranscriptsReceived} received: "${text}" (${timeSinceLastSend}ms since last send)`, 'color: green; font-weight: bold');
+            }
             addTranscript(speaker, text);
           } else {
             console.log(`[${speaker}] ⚠️ serverContent received but no text:`, JSON.stringify(data.serverContent).substring(0, 200));
@@ -463,14 +509,28 @@ function setupAudioProcessor(stream, ws, speaker, channelCount = 1) {
   console.log(`[${speaker}] Connected to destination with zero gain (silent)`);
 
   let audioChunkCount = 0;
+  let lastAudioLevel = 0;
+  let silentChunks = 0;
+  const SILENT_THRESHOLD = 0.01;
+  const LONG_SILENCE_CHUNKS = 500; // 約10秒（20ms * 500）
+
   recorder.onaudioprocess = (e) => {
     if (audioChunkCount === 0) {
-      console.log(`[${speaker}] onaudioprocess called for first time`);
+      console.log(`%c[${speaker}] 🎬 onaudioprocess started`, 'color: blue; font-weight: bold');
     }
 
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      if (audioChunkCount === 0) {
-        console.warn(`[${speaker}] WebSocket not ready. State: ${ws?.readyState}`);
+      if (audioChunkCount === 0 || audioChunkCount % 100 === 0) {
+        console.warn(`%c[${speaker}] ⚠️ WebSocket not ready. State: ${ws?.readyState}`, 'color: orange; font-weight: bold');
+      }
+      return;
+    }
+
+    // 顧客が話している間はオペレーターの音声送信をスキップ（顧客優先）
+    const PRIORITY_THRESHOLD = 0.03;
+    if (speaker === 'operator' && currentSysLevel > PRIORITY_THRESHOLD) {
+      if (audioChunkCount % 100 === 0) {
+        console.log(`%c[${speaker}] ⏸️ Skipping operator audio (customer priority active, sysLevel=${currentSysLevel.toFixed(4)})`, 'color: gray');
       }
       return;
     }
@@ -511,6 +571,28 @@ function setupAudioProcessor(stream, ws, speaker, channelCount = 1) {
     }
     const base64Audio = btoa(binary);
 
+    // 音声レベルの変化を検出
+    const isCurrentlySilent = maxAmplitude < SILENT_THRESHOLD;
+    const wasSilent = lastAudioLevel < SILENT_THRESHOLD;
+
+    if (isCurrentlySilent) {
+      silentChunks++;
+      // 長時間無音後の警告
+      if (silentChunks === LONG_SILENCE_CHUNKS) {
+        console.log(`%c[${speaker}] 🔇 Long silence detected (>10 seconds)`, 'color: orange; font-weight: bold');
+      }
+    } else {
+      // 音声が再開された
+      if (wasSilent && silentChunks >= LONG_SILENCE_CHUNKS) {
+        const now = Date.now();
+        const lastSendTime = speaker === 'operator' ? lastMicSendTime : lastSysSendTime;
+        const timeSinceLastSend = lastSendTime > 0 ? now - lastSendTime : 0;
+        console.log(`%c[${speaker}] 🔊 Audio resumed after long silence (${(silentChunks * 20 / 1000).toFixed(1)}s), last send was ${(timeSinceLastSend / 1000).toFixed(1)}s ago`, 'color: lime; font-weight: bold');
+      }
+      silentChunks = 0;
+    }
+    lastAudioLevel = maxAmplitude;
+
     const audioMsg = {
       realtimeInput: {
         audio: {
@@ -519,15 +601,38 @@ function setupAudioProcessor(stream, ws, speaker, channelCount = 1) {
         }
       }
     };
-    ws.send(JSON.stringify(audioMsg));
 
-    audioChunkCount++;
-    if (audioChunkCount <= 10 || audioChunkCount % 50 === 0) {
-      console.log(`[${speaker}] 📤 Sent chunk #${audioChunkCount}: size=${pcm16.buffer.byteLength}B, maxAmp=${maxAmplitude.toFixed(4)}, wsState=${ws.readyState}`);
-    }
+    try {
+      ws.send(JSON.stringify(audioMsg));
 
-    if (speaker === 'customer' && audioChunkCount % 10 === 0) {
-      console.log(`%c[customer] 🔊 Audio streaming active: chunk ${audioChunkCount}, amplitude: ${maxAmplitude.toFixed(4)}`, 'color: #e91e63; font-weight: bold');
+      // 送信成功時の記録
+      const now = Date.now();
+      if (speaker === 'operator') {
+        lastMicSendTime = now;
+        micChunksSent++;
+        if (maxAmplitude > SILENT_THRESHOLD) {
+          lastMicActivityTime = now;
+        }
+      } else {
+        lastSysSendTime = now;
+        sysChunksSent++;
+        if (maxAmplitude > SILENT_THRESHOLD) {
+          lastSysActivityTime = now;
+        }
+      }
+
+      audioChunkCount++;
+      if (audioChunkCount <= 10 || audioChunkCount % 50 === 0) {
+        const lastTranscriptTime = speaker === 'operator' ? lastMicTranscriptTime : lastSysTranscriptTime;
+        const timeSinceLastTranscript = lastTranscriptTime > 0 ? now - lastTranscriptTime : 0;
+        console.log(`[${speaker}] 📤 Sent chunk #${audioChunkCount}: size=${pcm16.buffer.byteLength}B, maxAmp=${maxAmplitude.toFixed(4)}, wsState=${ws.readyState}, lastTranscript=${(timeSinceLastTranscript / 1000).toFixed(1)}s ago`);
+      }
+
+      if (speaker === 'customer' && audioChunkCount % 10 === 0) {
+        console.log(`%c[customer] 🔊 Audio streaming: chunk ${audioChunkCount}, amp=${maxAmplitude.toFixed(4)}`, 'color: #e91e63; font-weight: bold');
+      }
+    } catch (error) {
+      console.error(`%c[${speaker}] ❌ WebSocket send error:`, 'color: red; font-weight: bold', error);
     }
   };
 
@@ -550,7 +655,21 @@ async function startTranscription() {
 
   createSession();
   startAutoSave();
+
+  // デバッグカウンターをリセット
+  lastMicSendTime = 0;
+  lastSysSendTime = 0;
+  lastMicTranscriptTime = 0;
+  lastSysTranscriptTime = 0;
+  micChunksSent = 0;
+  sysChunksSent = 0;
+  micTranscriptsReceived = 0;
+  sysTranscriptsReceived = 0;
+  lastMicActivityTime = 0;
+  lastSysActivityTime = 0;
+
   console.log('Auto-save enabled: 別タブで作業中でも10秒ごとに自動保存されます');
+  console.log('%c🔍 デバッグモード: 詳細なログが有効になっています', 'color: cyan; font-weight: bold');
 
   try {
     $audioDebug.style.display = 'block';
