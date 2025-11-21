@@ -134,7 +134,7 @@ function monitorAudioLevels() {
   let iconClass = 'fa-user-circle';
 
   if (micActive && sysActive) {
-    speakerText = '両方が同時に発話中（コラボス優先）';
+    speakerText = '両方が同時に発話中';
     $currentSpeaker.style.color = '#ff9800';
     iconClass = 'fa-users';
   } else if (micActive) {
@@ -472,11 +472,6 @@ function setupAudioProcessor(stream, ws, speaker, channelCount = 1) {
       if (audioChunkCount === 0) {
         console.warn(`[${speaker}] WebSocket not ready. State: ${ws?.readyState}`);
       }
-      return;
-    }
-
-    const PRIORITY_THRESHOLD = 0.03;
-    if (speaker === 'operator' && currentSysLevel > PRIORITY_THRESHOLD) {
       return;
     }
 
