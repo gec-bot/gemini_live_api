@@ -395,7 +395,7 @@ async function setupWebSocket(apiKey, speaker) {
 
       const init = {
         setup: {
-          model: 'models/gemini-2.0-flash-live-001',
+          model: 'models/gemini-2.0-flash-exp',
           generationConfig: {
             responseModalities: ['TEXT'],
             temperature: 0.0,
