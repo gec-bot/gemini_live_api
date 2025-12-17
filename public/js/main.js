@@ -56,6 +56,8 @@ let levelMonitorInterval = null;
 let currentMicLevel = 0;
 let currentSysLevel = 0;
 let transcriptBuffer = [];
+let isTranscriptionActive = false;
+let deviceChangeDetected = false;
 
 // デバッグ用：音声送信とトランスクリプション受信の追跡
 let lastMicSendTime = 0;
@@ -287,6 +289,158 @@ function stopAutoSave() {
     clearInterval(autoSaveInterval);
     autoSaveInterval = null;
   }
+}
+
+// ===== トラック状態監視 =====
+function monitorTrackHealth(stream, speaker, onTrackEnded) {
+  if (!stream) return;
+
+  const tracks = stream.getAudioTracks();
+  tracks.forEach(track => {
+    console.log(`%c[${speaker}] 🔍 Monitoring track: ${track.label}, state: ${track.readyState}`, 'color: cyan; font-weight: bold');
+
+    // トラック終了イベント
+    track.onended = () => {
+      console.error(`%c[${speaker}] ❌ Track ENDED unexpectedly!`, 'color: red; font-weight: bold; font-size: 14px');
+      if (isTranscriptionActive && onTrackEnded) {
+        onTrackEnded(speaker);
+      }
+    };
+
+    // ミュートイベント
+    track.onmute = () => {
+      console.warn(`%c[${speaker}] 🔇 Track MUTED!`, 'color: orange; font-weight: bold');
+      if (isTranscriptionActive) {
+        setStatus('警告', `${speaker === 'customer' ? '顧客' : 'オペレーター'}音声がミュートされました`, 'error');
+      }
+    };
+
+    // ミュート解除イベント
+    track.onunmute = () => {
+      console.log(`%c[${speaker}] 🔊 Track UNMUTED`, 'color: green; font-weight: bold');
+    };
+  });
+}
+
+// 定期的なトラック状態チェック
+function startTrackHealthCheck() {
+  const healthCheckInterval = setInterval(() => {
+    if (!isTranscriptionActive) {
+      clearInterval(healthCheckInterval);
+      return;
+    }
+
+    // マイクトラックのチェック
+    if (micStream) {
+      const micTracks = micStream.getAudioTracks();
+      const micTrackActive = micTracks.length > 0 && micTracks[0].readyState === 'live';
+      if (!micTrackActive) {
+        console.error('%c⚠️ Microphone track is not live! Attempting reconnection...', 'color: red; font-weight: bold');
+        handleTrackFailure('operator');
+      }
+    }
+
+    // システム音声トラックのチェック
+    if (sysStream && $useSystemAudio.checked) {
+      const sysTracks = sysStream.getAudioTracks();
+      const sysTrackActive = sysTracks.length > 0 && sysTracks[0].readyState === 'live';
+      if (!sysTrackActive) {
+        console.error('%c⚠️ System audio track is not live! Attempting reconnection...', 'color: red; font-weight: bold');
+        handleTrackFailure('customer');
+      }
+    }
+  }, 5000); // 5秒ごとにチェック
+
+  console.log('Track health check started (every 5 seconds)');
+}
+
+// トラック障害時の処理
+async function handleTrackFailure(speaker) {
+  console.log(`%c[${speaker}] 🔄 Attempting to reconnect audio...`, 'color: blue; font-weight: bold');
+
+  if (speaker === 'customer') {
+    // 顧客音声の再接続を試みる
+    try {
+      const savedSysDeviceId = localStorage.getItem('sysDeviceId');
+      if (!savedSysDeviceId) return;
+
+      // 既存のストリームを停止
+      if (sysStream) {
+        sysStream.getTracks().forEach(t => t.stop());
+      }
+      if (sysRecorder) {
+        sysRecorder.disconnect();
+      }
+      if (wsSys) {
+        wsSys.close(1000, 'reconnecting');
+      }
+
+      // 新しいストリームを取得
+      sysStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: { exact: savedSysDeviceId },
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        },
+        video: false
+      });
+
+      const sysTrack = sysStream.getAudioTracks()[0];
+      console.log(`%c[${speaker}] ✅ Reconnected successfully:`, 'color: green; font-weight: bold', sysTrack.label);
+      $sysInfo.textContent = `システム音声: ${sysTrack.label} (再接続)`;
+
+      // アナライザーを再設定
+      if (audioContext) {
+        const sysSrc = audioContext.createMediaStreamSource(sysStream);
+        sysAnalyser = audioContext.createAnalyser();
+        sysAnalyser.fftSize = 256;
+        sysDataArray = new Uint8Array(sysAnalyser.frequencyBinCount);
+        sysSrc.connect(sysAnalyser);
+      }
+
+      // WebSocketを再接続
+      const apiKey = await fetchApiKey();
+      const { ws: sysWs } = await setupWebSocket(apiKey, 'customer');
+      wsSys = sysWs;
+
+      // オーディオプロセッサーを再設定
+      const { recorder: sysRec } = setupAudioProcessor(sysStream, wsSys, 'customer');
+      sysRecorder = sysRec;
+
+      // トラック監視を再設定
+      monitorTrackHealth(sysStream, 'customer', handleTrackFailure);
+
+      setStatus('再接続完了', '顧客音声を再接続しました', 'success');
+      console.log('%c[customer] ✅ Full reconnection completed', 'color: green; font-weight: bold');
+    } catch (e) {
+      console.error('%c[customer] ❌ Reconnection failed:', 'color: red; font-weight: bold', e);
+      setStatus('再接続失敗', '顧客音声の再接続に失敗しました。デバイス設定を確認してください', 'error');
+      $sysInfo.textContent = 'システム音声: 再接続失敗';
+    }
+  } else if (speaker === 'operator') {
+    // オペレーター音声の障害は致命的なので、ユーザーに通知
+    setStatus('エラー', 'マイクが切断されました。文字起こしを再起動してください', 'error');
+    alert('マイクが切断されました。文字起こしを停止して再度開始してください。');
+  }
+}
+
+// デバイス変更の監視
+function setupDeviceChangeListener() {
+  navigator.mediaDevices.addEventListener('devicechange', async () => {
+    console.warn('%c🔄 Audio device configuration changed!', 'color: orange; font-weight: bold; font-size: 14px');
+    deviceChangeDetected = true;
+
+    if (isTranscriptionActive) {
+      setStatus('警告', 'オーディオデバイスの構成が変更されました', 'error');
+
+      // デバイスリストを再取得してログに出力
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(d => d.kind === 'audioinput');
+      console.log('Updated audio devices:', audioInputs.map(d => ({ id: d.deviceId.substring(0, 8), label: d.label })));
+    }
+  });
+  console.log('Device change listener registered');
 }
 
 // ===== デバイス管理 =====
@@ -655,6 +809,8 @@ async function startTranscription() {
   $out.innerHTML = '';
   $txt.value = '';
   transcriptBuffer = [];
+  isTranscriptionActive = true;
+  deviceChangeDetected = false;
 
   createSession();
   startAutoSave();
@@ -690,6 +846,9 @@ async function startTranscription() {
     $micInfo.textContent = `マイク: ${micTrack.label || '接続済み'} (デバイスID: ${micTrack.id.substring(0, 8)}...)`;
     console.log('Microphone track:', micTrack);
 
+    // マイクトラックの監視を開始
+    monitorTrackHealth(micStream, 'operator', handleTrackFailure);
+
     if (useSystemAudio && savedSysDeviceId) {
       setStatus('起動中...', 'システム音声デバイスを取得しています', 'running');
       console.log(`%c🔍 Attempting to get customer audio device: ${savedSysDeviceId}`, 'color: purple; font-weight: bold');
@@ -714,6 +873,9 @@ async function startTranscription() {
           readyState: sysTrack.readyState,
           settings: sysTrack.getSettings()
         });
+
+        // システム音声トラックの監視を開始
+        monitorTrackHealth(sysStream, 'customer', handleTrackFailure);
       } catch (e) {
         console.error('%c❌ 顧客音声用デバイスの取得に失敗:', 'color: red; font-weight: bold', e);
         setStatus('警告', 'システム音声の取得に失敗。マイクのみで続行します', 'error');
@@ -776,6 +938,7 @@ async function startTranscription() {
     }
 
     startLevelMonitoring();
+    startTrackHealthCheck();
 
     setStatus('文字起こし中...', '2つの音声ソースが独立して処理されています', 'running');
   } catch (e) {
@@ -791,6 +954,7 @@ async function startTranscription() {
 // ===== 文字起こし停止 =====
 function stopTranscription() {
   setStatus('停止中...', '処理を終了しています', 'running');
+  isTranscriptionActive = false;
 
   stopAutoSave();
   if ($txt.value.trim().length > 0) {
@@ -1105,3 +1269,4 @@ initThemeSwitcher();
 loadOperatorName();
 updateButtons(false);
 checkDeviceConfig();
+setupDeviceChangeListener();
