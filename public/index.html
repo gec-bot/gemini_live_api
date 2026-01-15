@@ -3,13 +3,736 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Gemini Live リアルタイム文字起こし（コールセンター対応）</title>
+  <title>COTOHA Voice Insight - リアルタイム文字起こし</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
-  <link rel="stylesheet" href="css/style.css">
+  <style>
+    /* ===== CSS変数（3テーマ対応） ===== */
+    :root[data-theme="blue"] {
+      --primary: #3b82f6;
+      --primary-dark: #2563eb;
+      --primary-light: #60a5fa;
+      --secondary: #8b5cf6;
+      --accent: #06b6d4;
+      --gradient-start: #3b82f6;
+      --gradient-end: #8b5cf6;
+    }
+    
+    :root[data-theme="red"] {
+      --primary: #ef4444;
+      --primary-dark: #dc2626;
+      --primary-light: #f87171;
+      --secondary: #f59e0b;
+      --accent: #ec4899;
+      --gradient-start: #ef4444;
+      --gradient-end: #f59e0b;
+    }
+    
+    :root[data-theme="yellow"] {
+      --primary: #eab308;
+      --primary-dark: #ca8a04;
+      --primary-light: #facc15;
+      --secondary: #10b981;
+      --accent: #06b6d4;
+      --gradient-start: #eab308;
+      --gradient-end: #10b981;
+    }
+
+    /* ベーススタイル */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
+      min-height: 100vh;
+      color: #1f2937;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    /* ヘッダー */
+    .header {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-radius: 20px;
+      padding: 20px 30px;
+      margin-bottom: 24px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+      animation: slideDown 0.5s ease-out;
+    }
+
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        transform: translateY(-20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .header-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .logo-icon {
+      width: 60px;
+      height: 60px;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 28px;
+      box-shadow: 0 8px 24px rgba(59, 130, 246, 0.3);
+    }
+
+    .logo-text h1 {
+      font-size: 28px;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .logo-subtitle {
+      color: #6b7280;
+      font-size: 14px;
+      margin-top: 4px;
+    }
+
+    /* テーマスイッチャー */
+    .theme-switcher {
+      display: flex;
+      gap: 12px;
+      padding: 8px;
+      background: #f3f4f6;
+      border-radius: 12px;
+    }
+
+    .theme-btn {
+      width: 40px;
+      height: 40px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      background: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+    }
+
+    .theme-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .theme-btn[data-theme="blue"] i { color: #3b82f6; }
+    .theme-btn[data-theme="red"] i { color: #ef4444; }
+    .theme-btn[data-theme="yellow"] i { color: #eab308; }
+
+    /* メインコンテンツレイアウト */
+    .main-layout {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 24px;
+      animation: fadeIn 0.6s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    /* 左カラム */
+    .left-column {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* ステータスカード */
+    .status-section {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 20px;
+    }
+
+    .status-card, .operator-card {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+    }
+
+    .status-card {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .status-icon-container {
+      width: 70px;
+      height: 70px;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .status-icon {
+      color: white;
+      font-size: 32px;
+    }
+
+    .status-icon.running i {
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .status-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 6px;
+    }
+
+    .status-text {
+      font-size: 14px;
+      color: #6b7280;
+    }
+
+    /* オペレーターカード */
+    .operator-card {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .operator-icon {
+      width: 50px;
+      height: 50px;
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+
+    .operator-input-group {
+      flex: 1;
+    }
+
+    .operator-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #6b7280;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .operator-input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 2px solid #e5e7eb;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 500;
+      transition: all 0.3s ease;
+      color: #111827;
+    }
+
+    .operator-input:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    /* コントロールグリッド */
+    .control-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    .control-card {
+      background: white;
+      border: none;
+      border-radius: 16px;
+      padding: 24px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .control-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%);
+      transform: scaleX(0);
+      transition: transform 0.3s ease;
+    }
+
+    .control-card:hover::before {
+      transform: scaleX(1);
+    }
+
+    .control-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+    }
+
+    .control-card:active {
+      transform: translateY(-2px);
+    }
+
+    .control-card:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    .control-icon {
+      width: 50px;
+      height: 50px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      color: white;
+    }
+
+    .control-card-primary .control-icon {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .control-card-danger .control-icon {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    }
+
+    .control-card-secondary .control-icon {
+      background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+    }
+
+    .control-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: #374151;
+      text-align: center;
+    }
+
+    /* 文字起こしエリア */
+    .transcript-container {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-radius: 20px;
+      padding: 28px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      flex: 1;
+    }
+
+    .transcript-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .transcript-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: #111827;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .transcript-title i {
+      color: var(--primary);
+    }
+
+    .transcript-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .transcript-btn {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .transcript-btn-clear {
+      background: #fee2e2;
+      color: #dc2626;
+    }
+
+    .transcript-btn-clear:hover {
+      background: #fecaca;
+    }
+
+    .transcript-btn-copy {
+      background: #dbeafe;
+      color: #2563eb;
+    }
+
+    .transcript-btn-copy:hover {
+      background: #bfdbfe;
+    }
+
+    .transcript-area {
+      flex: 1;
+      min-height: 400px;
+      padding: 20px;
+      border: 2px solid #e5e7eb;
+      border-radius: 14px;
+      font-size: 15px;
+      line-height: 1.8;
+      color: #374151;
+      resize: vertical;
+      font-family: 'Inter', sans-serif;
+      background: white;
+      transition: border-color 0.3s ease;
+    }
+
+    .transcript-area:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    /* 右サイドバー */
+    .right-sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .sidebar-card {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+    }
+
+    .sidebar-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .sidebar-title i {
+      color: var(--primary);
+    }
+
+    /* 感情分析 */
+    .emotion-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .emotion-item {
+      padding: 14px;
+      background: #f9fafb;
+      border-radius: 12px;
+      text-align: center;
+      transition: all 0.3s ease;
+    }
+
+    .emotion-item:hover {
+      background: #f3f4f6;
+      transform: translateY(-2px);
+    }
+
+    .emotion-icon {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+
+    .emotion-name {
+      font-size: 12px;
+      color: #6b7280;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    .emotion-score {
+      font-size: 18px;
+      font-weight: 700;
+      color: #111827;
+    }
+
+    .emotion-score.positive {
+      color: #10b981;
+    }
+
+    .emotion-score.negative {
+      color: #ef4444;
+    }
+
+    .emotion-score.neutral {
+      color: #6b7280;
+    }
+
+    /* FAQ */
+    .faq-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .faq-item {
+      padding: 16px;
+      background: #f9fafb;
+      border-radius: 12px;
+      border-left: 4px solid var(--primary);
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .faq-item:hover {
+      background: #f3f4f6;
+      transform: translateX(4px);
+    }
+
+    .faq-question {
+      font-size: 14px;
+      font-weight: 600;
+      color: #111827;
+      margin-bottom: 8px;
+    }
+
+    .faq-answer {
+      font-size: 13px;
+      color: #6b7280;
+      line-height: 1.6;
+    }
+
+    /* アラート */
+    .alert-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .alert-item {
+      padding: 14px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      animation: slideIn 0.3s ease-out;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateX(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    .alert-item.warning {
+      background: #fef3c7;
+      border-left: 4px solid #f59e0b;
+    }
+
+    .alert-item.danger {
+      background: #fee2e2;
+      border-left: 4px solid #ef4444;
+    }
+
+    .alert-item.info {
+      background: #dbeafe;
+      border-left: 4px solid #3b82f6;
+    }
+
+    .alert-icon {
+      font-size: 20px;
+    }
+
+    .alert-item.warning .alert-icon {
+      color: #f59e0b;
+    }
+
+    .alert-item.danger .alert-icon {
+      color: #ef4444;
+    }
+
+    .alert-item.info .alert-icon {
+      color: #3b82f6;
+    }
+
+    .alert-text {
+      flex: 1;
+      font-size: 13px;
+      color: #374151;
+      line-height: 1.5;
+    }
+
+    /* コールリーズン */
+    .reason-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .reason-tag {
+      padding: 8px 14px;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      color: white;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+    }
+
+    .reason-category {
+      font-size: 16px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #e5e7eb;
+    }
+
+    /* レスポンシブ */
+    @media (max-width: 1200px) {
+      .main-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .right-sidebar {
+        grid-template-columns: repeat(2, 1fr);
+        display: grid;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .status-section {
+        grid-template-columns: 1fr;
+      }
+
+      .control-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .right-sidebar {
+        grid-template-columns: 1fr;
+      }
+
+      .header-content {
+        flex-direction: column;
+        gap: 16px;
+      }
+    }
+
+    /* スクロールバー */
+    ::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #f3f4f6;
+      border-radius: 10px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      border-radius: 10px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--primary-dark);
+    }
+
+    /* 現在の話者表示 */
+    .current-speaker {
+      padding: 12px 16px;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+      color: white;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      text-align: center;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+
+    .no-data {
+      text-align: center;
+      color: #9ca3af;
+      font-size: 14px;
+      padding: 20px;
+    }
+  </style>
 </head>
 <body data-theme="blue">
-
   <div class="container">
     <!-- ヘッダー -->
     <header class="header">
@@ -19,8 +742,8 @@
             <i class="fas fa-microphone-alt"></i>
           </div>
           <div class="logo-text">
-            <h1>Gemini Live</h1>
-            <p class="logo-subtitle">リアルタイム文字起こし（コールセンター対応）</p>
+            <h1>COTOHA Voice Insight</h1>
+            <p class="logo-subtitle">コールセンター向けAI文字起こしシステム</p>
           </div>
         </div>
         <div class="header-actions">
@@ -39,275 +762,696 @@
       </div>
     </header>
 
-    <!-- ステータスカードと担当者入力 -->
-    <div class="top-section">
-      <div class="status-card" id="statusCard">
-        <div class="status-icon-container">
-          <div class="status-icon" id="statusIcon">
-            <i class="fas fa-circle-notch"></i>
+    <!-- メインレイアウト -->
+    <div class="main-layout">
+      <!-- 左カラム -->
+      <div class="left-column">
+        <!-- ステータスとオペレーター -->
+        <div class="status-section">
+          <div class="status-card">
+            <div class="status-icon-container">
+              <div class="status-icon" id="statusIcon">
+                <i class="fas fa-circle-notch"></i>
+              </div>
+            </div>
+            <div class="status-content">
+              <h3 class="status-title" id="statusTitle">準備完了</h3>
+              <p class="status-text" id="statusText">「文字起こし開始」ボタンをクリックしてください</p>
+            </div>
           </div>
-        </div>
-        <div class="status-content">
-          <h3 class="status-title" id="statusTitle">準備完了</h3>
-          <p class="status-text" id="statusText">「文字起こし開始」ボタンをクリックしてください</p>
-        </div>
-      </div>
 
-      <div class="operator-card">
-        <div class="operator-icon">
-          <i class="fas fa-user-tie"></i>
-        </div>
-        <div class="operator-input-group">
-          <label for="operatorName" class="operator-label">担当者名</label>
-          <input
-            type="text"
-            id="operatorName"
-            class="operator-input"
-            placeholder="山田 太郎"
-          />
-        </div>
-      </div>
-    </div>
-
-    <!-- メインコントロール -->
-    <div class="control-grid">
-      <button id="start" class="control-card control-card-primary">
-        <div class="control-icon">
-          <i class="fas fa-microphone"></i>
-        </div>
-        <div class="control-label">文字起こし開始</div>
-      </button>
-
-      <button id="stop" class="control-card control-card-danger" disabled>
-        <div class="control-icon">
-          <i class="fas fa-stop"></i>
-        </div>
-        <div class="control-label">停止</div>
-      </button>
-
-      <button id="configDevices" class="control-card control-card-secondary">
-        <div class="control-icon">
-          <i class="fas fa-cog"></i>
-        </div>
-        <div class="control-label">デバイス設定</div>
-      </button>
-
-      <label class="control-card control-card-checkbox">
-        <input type="checkbox" id="useSystemAudio" checked>
-        <div class="checkbox-icon">
-          <i class="fas fa-check"></i>
-        </div>
-        <div class="control-label">システム音声（コラボス）も含める</div>
-      </label>
-    </div>
-
-    <!-- オーディオデバッグパネル -->
-    <div id="audioDebug" class="audio-panel" style="display: none;">
-      <div class="panel-header">
-        <i class="fas fa-signal"></i>
-        <h3>音声入力情報</h3>
-      </div>
-
-      <div class="device-cards">
-        <div class="device-card">
-          <div class="device-icon operator">
-            <i class="fas fa-user"></i>
-          </div>
-          <div class="device-info">
-            <span class="device-label">オペレーター</span>
-            <span class="device-name" id="micInfo">マイク: 未接続</span>
+          <div class="operator-card">
+            <div class="operator-icon">
+              <i class="fas fa-user-tie"></i>
+            </div>
+            <div class="operator-input-group">
+              <label for="operatorName" class="operator-label">担当者名</label>
+              <input
+                type="text"
+                id="operatorName"
+                class="operator-input"
+                placeholder="山田 太郎"
+              />
+            </div>
           </div>
         </div>
 
-        <div class="device-card">
-          <div class="device-icon customer">
-            <i class="fas fa-phone"></i>
-          </div>
-          <div class="device-info">
-            <span class="device-label">顧客（コラボス）</span>
-            <span class="device-name" id="sysInfo">システム音声: 未接続</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="audio-meters">
-        <div class="meter-item">
-          <div class="meter-header">
-            <span class="meter-label">
-              <i class="fas fa-user"></i>
-              オペレーター音量
-            </span>
-          </div>
-          <div class="meter-track">
-            <div class="meter-fill operator-meter" id="micLevelBar"></div>
-            <div class="meter-glow"></div>
-          </div>
-        </div>
-
-        <div class="meter-item">
-          <div class="meter-header">
-            <span class="meter-label">
-              <i class="fas fa-phone"></i>
-              顧客音量
-            </span>
-          </div>
-          <div class="meter-track">
-            <div class="meter-fill customer-meter" id="sysLevelBar"></div>
-            <div class="meter-glow"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="current-speaker" id="currentSpeaker">
-        <div class="speaker-indicator">
-          <i class="fas fa-user-circle"></i>
-        </div>
-        <span>現在の話者: --</span>
-      </div>
-    </div>
-
-    <!-- 文字起こしエリア -->
-    <div class="transcript-section">
-      <div class="section-header">
-        <h2>
-          <i class="fas fa-file-alt"></i>
-          文字起こし結果
-        </h2>
-        <div class="section-actions">
-          <button id="clearTranscript" class="icon-btn" title="クリア">
-            <i class="fas fa-eraser"></i>
-          </button>
-          <button id="copyTranscript" class="icon-btn" title="コピー">
-            <i class="fas fa-copy"></i>
-          </button>
-        </div>
-      </div>
-      <div class="transcript-wrapper">
-        <textarea id="transcript" placeholder="ここにリアルタイムで文字起こしが表示されます..."></textarea>
-      </div>
-    </div>
-
-    <!-- 分析セクション -->
-    <div class="analysis-section">
-      <div class="section-header">
-        <span class="section-hint">停止後に実行できます</span>
-      </div>
-
-      <div class="action-grid">
-        <button id="summarize" class="action-card" disabled>
-          <div class="action-icon">
-            <i class="fas fa-magic"></i>
-          </div>
-          <span class="action-label">要約を生成</span>
-        </button>
-
-        <button id="terms" class="action-card" disabled>
-          <div class="action-icon">
-            <i class="fas fa-book"></i>
-          </div>
-          <span class="action-label">専門用語チェック</span>
-        </button>
-
-        <button id="saveSession" class="action-card" disabled>
-          <div class="action-icon">
-            <i class="fas fa-save"></i>
-          </div>
-          <span class="action-label">保存</span>
-        </button>
-
-        <button id="viewHistory" class="action-card">
-          <div class="action-icon">
-            <i class="fas fa-history"></i>
-          </div>
-          <span class="action-label">履歴を表示</span>
-        </button>
-      </div>
-
-      <div id="llmOut" class="analysis-output"></div>
-    </div>
-
-    <!-- 履歴モーダル -->
-    <div id="historyModal" class="modal">
-      <div class="modal-overlay"></div>
-      <div class="modal-container">
-        <div class="modal-header">
-          <h2>
-            <i class="fas fa-history"></i>
-            文字起こし履歴
-          </h2>
-          <button id="closeHistory" class="modal-close-btn">
-            <i class="fas fa-times"></i>
-          </button>
-        </div>
-        <div class="modal-body">
-          <div id="historyList"></div>
-        </div>
-        <div class="modal-footer">
-          <button id="closeHistoryBtn" class="btn btn-secondary">閉じる</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- デバイス設定モーダル -->
-    <div id="deviceModal" class="modal">
-      <div class="modal-overlay"></div>
-      <div class="modal-container">
-        <div class="modal-header">
-          <h2>
-            <i class="fas fa-cog"></i>
-            オーディオデバイス設定
-          </h2>
-          <button id="cancelDeviceConfig" class="modal-close-btn">
-            <i class="fas fa-times"></i>
-          </button>
-        </div>
-
-        <div class="modal-body">
-          <p class="modal-description">
-            各音声入力デバイスを選択してください。設定は自動的に保存され、次回から自動的に使用されます。
-          </p>
-
-          <div class="form-group">
-            <label class="form-label">
+        <!-- コントロールボタン -->
+        <div class="control-grid">
+          <button id="startBtn" class="control-card control-card-primary">
+            <div class="control-icon">
               <i class="fas fa-microphone"></i>
-              オペレーター用マイク
-            </label>
-            <select id="micDeviceSelect" class="form-select">
-              <option value="">デバイスを選択...</option>
-            </select>
-          </div>
+            </div>
+            <div class="control-label">文字起こし開始</div>
+          </button>
 
-          <div class="form-group">
-            <label class="form-label">
-              <i class="fas fa-volume-up"></i>
-              顧客音声用デバイス（コラボス/仮想オーディオケーブル）
-            </label>
-            <select id="sysDeviceSelect" class="form-select">
-              <option value="">デバイスを選択...</option>
-              <option value="NONE">使用しない</option>
-            </select>
-            <p class="form-hint">
-              <i class="fas fa-info-circle"></i>
-              VB-CABLEなどの仮想オーディオデバイスを選択してください
-            </p>
+          <button id="stopBtn" class="control-card control-card-danger" disabled>
+            <div class="control-icon">
+              <i class="fas fa-stop"></i>
+            </div>
+            <div class="control-label">停止</div>
+          </button>
+
+          <button id="clearBtn" class="control-card control-card-secondary">
+            <div class="control-icon">
+              <i class="fas fa-eraser"></i>
+            </div>
+            <div class="control-label">クリア</div>
+          </button>
+
+          <button id="saveBtn" class="control-card control-card-secondary">
+            <div class="control-icon">
+              <i class="fas fa-save"></i>
+            </div>
+            <div class="control-label">保存</div>
+          </button>
+        </div>
+
+        <!-- 文字起こしエリア -->
+        <div class="transcript-container">
+          <div class="transcript-header">
+            <h2 class="transcript-title">
+              <i class="fas fa-comments"></i>
+              文字起こし結果
+            </h2>
+            <div class="transcript-actions">
+              <button class="transcript-btn transcript-btn-clear" id="clearTranscriptBtn">
+                <i class="fas fa-times"></i>
+                クリア
+              </button>
+              <button class="transcript-btn transcript-btn-copy" id="copyTranscriptBtn">
+                <i class="fas fa-copy"></i>
+                コピー
+              </button>
+            </div>
+          </div>
+          <div id="currentSpeaker" class="current-speaker">話者: 未検出</div>
+          <textarea id="transcript" class="transcript-area" readonly placeholder="文字起こし結果がここに表示されます..."></textarea>
+        </div>
+      </div>
+
+      <!-- 右サイドバー -->
+      <div class="right-sidebar">
+        <!-- 感情分析 -->
+        <div class="sidebar-card">
+          <h3 class="sidebar-title">
+            <i class="fas fa-smile"></i>
+            リアルタイム感情分析
+          </h3>
+          <div class="emotion-grid" id="emotionGrid">
+            <div class="emotion-item">
+              <div class="emotion-icon">😊</div>
+              <div class="emotion-name">喜び</div>
+              <div class="emotion-score neutral" id="joyScore">0.0</div>
+            </div>
+            <div class="emotion-item">
+              <div class="emotion-icon">😢</div>
+              <div class="emotion-name">悲しみ</div>
+              <div class="emotion-score neutral" id="sadnessScore">0.0</div>
+            </div>
+            <div class="emotion-item">
+              <div class="emotion-icon">😠</div>
+              <div class="emotion-name">怒り</div>
+              <div class="emotion-score neutral" id="angerScore">0.0</div>
+            </div>
+            <div class="emotion-item">
+              <div class="emotion-icon">😨</div>
+              <div class="emotion-name">恐れ</div>
+              <div class="emotion-score neutral" id="fearScore">0.0</div>
+            </div>
+            <div class="emotion-item">
+              <div class="emotion-icon">🤢</div>
+              <div class="emotion-name">嫌悪</div>
+              <div class="emotion-score neutral" id="disgustScore">0.0</div>
+            </div>
+            <div class="emotion-item">
+              <div class="emotion-icon">😲</div>
+              <div class="emotion-name">驚き</div>
+              <div class="emotion-score neutral" id="surpriseScore">0.0</div>
+            </div>
           </div>
         </div>
 
-        <div class="modal-footer">
-          <button id="resetDevices" class="btn btn-warning">
-            <i class="fas fa-redo"></i>
-            設定をリセット
-          </button>
-          <button class="btn btn-secondary" onclick="document.getElementById('deviceModal').style.display='none'">キャンセル</button>
-          <button id="saveDeviceConfig" class="btn btn-primary">
-            <i class="fas fa-check"></i>
-            保存
-          </button>
+        <!-- FAQ自動表示 -->
+        <div class="sidebar-card">
+          <h3 class="sidebar-title">
+            <i class="fas fa-question-circle"></i>
+            FAQ自動表示
+          </h3>
+          <div class="faq-list" id="faqList">
+            <div class="no-data">キーワードが検出されると、関連するFAQが表示されます</div>
+          </div>
+        </div>
+
+        <!-- アラート -->
+        <div class="sidebar-card">
+          <h3 class="sidebar-title">
+            <i class="fas fa-bell"></i>
+            リアルタイムアラート
+          </h3>
+          <div class="alert-list" id="alertList">
+            <div class="no-data">アラートはありません</div>
+          </div>
+        </div>
+
+        <!-- コールリーズン -->
+        <div class="sidebar-card">
+          <h3 class="sidebar-title">
+            <i class="fas fa-tags"></i>
+            コールリーズン
+          </h3>
+          <div class="reason-category" id="reasonCategory">カテゴリ: 未分類</div>
+          <div class="reason-tags" id="reasonTags">
+            <div class="no-data">通話中にキーワードが検出されます</div>
+          </div>
         </div>
       </div>
     </div>
   </div>
 
-  <script type="module" src="js/main.js"></script>
+  <script>
+    // ===== グローバル変数 =====
+    let isRecording = false;
+    let recognition = null;
+    let transcriptText = '';
+    let startTime = null;
+    let callDuration = 0;
+    let silenceTimer = null;
+    let lastSpeechTime = null;
+    let emotionScores = {
+      joy: 0,
+      sadness: 0,
+      anger: 0,
+      fear: 0,
+      disgust: 0,
+      surprise: 0
+    };
+
+    // FAQ データベース
+    const faqDatabase = [
+      { 
+        keywords: ['返品', '返金', '返却'], 
+        question: '返品・返金について', 
+        answer: '商品到着後30日以内であれば、未開封の商品に限り返品を承ります。'
+      },
+      { 
+        keywords: ['配送', '届かない', '発送'], 
+        question: '配送状況の確認', 
+        answer: 'ご注文番号をお伺いし、配送状況を確認いたします。'
+      },
+      { 
+        keywords: ['支払い', '決済', 'クレジット'], 
+        question: 'お支払い方法について', 
+        answer: 'クレジットカード、コンビニ決済、代金引換がご利用いただけます。'
+      },
+      { 
+        keywords: ['会員登録', 'アカウント', 'ログイン'], 
+        question: '会員登録について', 
+        answer: 'メールアドレスとパスワードを設定するだけで、簡単に会員登録できます。'
+      },
+      { 
+        keywords: ['キャンセル', '注文取消'], 
+        question: '注文のキャンセル', 
+        answer: '発送前であればキャンセルが可能です。マイページからお手続きください。'
+      },
+      { 
+        keywords: ['保証', '修理', '故障'], 
+        question: '製品保証について', 
+        answer: 'ご購入から1年間のメーカー保証が付いております。'
+      }
+    ];
+
+    // NGワード
+    const ngWords = ['ふざけるな', 'バカ', 'クソ', '詐欺', '最悪', '二度と'];
+
+    // コールリーズンカテゴリ
+    const callReasonCategories = {
+      '商品問い合わせ': ['商品', '価格', '在庫', 'サイズ', '色'],
+      '配送問い合わせ': ['配送', '発送', '届かない', '追跡'],
+      '返品・交換': ['返品', '返金', '交換', '不良品'],
+      '支払い問い合わせ': ['支払い', '決済', 'クレジット', '請求'],
+      'アカウント': ['会員', 'ログイン', 'パスワード', 'アカウント'],
+      'その他': []
+    };
+
+    // ===== DOM要素 =====
+    const elements = {
+      startBtn: document.getElementById('startBtn'),
+      stopBtn: document.getElementById('stopBtn'),
+      clearBtn: document.getElementById('clearBtn'),
+      saveBtn: document.getElementById('saveBtn'),
+      clearTranscriptBtn: document.getElementById('clearTranscriptBtn'),
+      copyTranscriptBtn: document.getElementById('copyTranscriptBtn'),
+      transcript: document.getElementById('transcript'),
+      statusIcon: document.getElementById('statusIcon'),
+      statusTitle: document.getElementById('statusTitle'),
+      statusText: document.getElementById('statusText'),
+      currentSpeaker: document.getElementById('currentSpeaker'),
+      operatorName: document.getElementById('operatorName'),
+      emotionGrid: document.getElementById('emotionGrid'),
+      faqList: document.getElementById('faqList'),
+      alertList: document.getElementById('alertList'),
+      reasonCategory: document.getElementById('reasonCategory'),
+      reasonTags: document.getElementById('reasonTags')
+    };
+
+    // ===== 初期化 =====
+    function init() {
+      // Web Speech API対応チェック
+      if (!('webkitSpeechRecognition' in window)) {
+        alert('お使いのブラウザは音声認識に対応していません。Google Chromeをご利用ください。');
+        return;
+      }
+
+      // 音声認識の初期化
+      recognition = new webkitSpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'ja-JP';
+
+      // イベントリスナー
+      recognition.onstart = handleRecognitionStart;
+      recognition.onresult = handleRecognitionResult;
+      recognition.onerror = handleRecognitionError;
+      recognition.onend = handleRecognitionEnd;
+
+      // ボタンイベント
+      elements.startBtn.addEventListener('click', startRecording);
+      elements.stopBtn.addEventListener('click', stopRecording);
+      elements.clearBtn.addEventListener('click', clearAll);
+      elements.saveBtn.addEventListener('click', saveSession);
+      elements.clearTranscriptBtn.addEventListener('click', clearTranscript);
+      elements.copyTranscriptBtn.addEventListener('click', copyTranscript);
+
+      // テーマスイッチャー
+      document.querySelectorAll('.theme-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.documentElement.setAttribute('data-theme', btn.dataset.theme);
+        });
+      });
+
+      console.log('初期化完了');
+    }
+
+    // ===== 録音開始 =====
+    function startRecording() {
+      try {
+        recognition.start();
+        isRecording = true;
+        startTime = Date.now();
+        lastSpeechTime = Date.now();
+        
+        elements.startBtn.disabled = true;
+        elements.stopBtn.disabled = false;
+        
+        updateStatus('文字起こし中', '音声を認識しています...', 'running');
+        elements.statusIcon.classList.add('running');
+        
+        // 沈黙チェック
+        checkSilence();
+        
+        // 通話時間チェック
+        checkCallDuration();
+        
+        addAlert('info', '文字起こしを開始しました');
+        
+      } catch (error) {
+        console.error('録音開始エラー:', error);
+        addAlert('danger', '録音を開始できませんでした');
+      }
+    }
+
+    // ===== 録音停止 =====
+    function stopRecording() {
+      try {
+        recognition.stop();
+        isRecording = false;
+        
+        elements.startBtn.disabled = false;
+        elements.stopBtn.disabled = true;
+        
+        updateStatus('停止', '文字起こしを停止しました', 'ready');
+        elements.statusIcon.classList.remove('running');
+        
+        clearTimeout(silenceTimer);
+        
+        addAlert('info', '文字起こしを停止しました');
+        
+      } catch (error) {
+        console.error('録音停止エラー:', error);
+      }
+    }
+
+    // ===== 認識結果の処理 =====
+    function handleRecognitionResult(event) {
+      let interimTranscript = '';
+      let finalTranscript = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript + '\n';
+          
+          // 最終結果の処理
+          processTranscript(transcript);
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      if (finalTranscript) {
+        transcriptText += finalTranscript;
+        elements.transcript.value = transcriptText;
+        elements.transcript.scrollTop = elements.transcript.scrollHeight;
+        lastSpeechTime = Date.now();
+      }
+
+      // 話者表示（仮）
+      const currentSpeaker = Math.random() > 0.5 ? 'オペレーター' : '顧客';
+      elements.currentSpeaker.textContent = `話者: ${currentSpeaker}`;
+    }
+
+    // ===== 文字起こし結果の分析 =====
+    function processTranscript(text) {
+      // 感情分析（デモ用）
+      analyzeEmotion(text);
+      
+      // FAQ検索
+      searchFAQ(text);
+      
+      // NGワードチェック
+      checkNGWords(text);
+      
+      // コールリーズン推定
+      estimateCallReason(text);
+    }
+
+    // ===== 感情分析 =====
+    function analyzeEmotion(text) {
+      // デモ用のシンプルな感情分析
+      const positiveWords = ['ありがとう', 'うれしい', '助かる', '良い', '素晴らしい', '満足'];
+      const negativeWords = ['困る', '悪い', '不満', '問題', '遅い', '届かない'];
+      const angerWords = ['ふざけるな', '許せない', '怒り', '最悪', 'ひどい'];
+      
+      let joyDelta = 0;
+      let sadnessDelta = 0;
+      let angerDelta = 0;
+      
+      positiveWords.forEach(word => {
+        if (text.includes(word)) joyDelta += 0.2;
+      });
+      
+      negativeWords.forEach(word => {
+        if (text.includes(word)) sadnessDelta += 0.15;
+      });
+      
+      angerWords.forEach(word => {
+        if (text.includes(word)) angerDelta += 0.3;
+      });
+      
+      // スコア更新（-1.0 〜 +1.0）
+      emotionScores.joy = Math.min(1.0, Math.max(-1.0, emotionScores.joy + joyDelta));
+      emotionScores.sadness = Math.min(1.0, Math.max(-1.0, emotionScores.sadness - sadnessDelta));
+      emotionScores.anger = Math.min(1.0, Math.max(-1.0, emotionScores.anger - angerDelta));
+      emotionScores.fear = Math.min(1.0, Math.max(-1.0, (Math.random() - 0.5) * 0.1));
+      emotionScores.disgust = Math.min(1.0, Math.max(-1.0, (Math.random() - 0.5) * 0.1));
+      emotionScores.surprise = Math.min(1.0, Math.max(-1.0, (Math.random() - 0.5) * 0.1));
+      
+      updateEmotionDisplay();
+      
+      // 感情スコアアラート
+      if (emotionScores.anger < -0.5) {
+        addAlert('danger', '顧客の怒りレベルが高まっています');
+      }
+      if (emotionScores.sadness < -0.5) {
+        addAlert('warning', '顧客が困惑している可能性があります');
+      }
+    }
+
+    // ===== 感情表示更新 =====
+    function updateEmotionDisplay() {
+      document.getElementById('joyScore').textContent = emotionScores.joy.toFixed(1);
+      document.getElementById('sadnessScore').textContent = emotionScores.sadness.toFixed(1);
+      document.getElementById('angerScore').textContent = emotionScores.anger.toFixed(1);
+      document.getElementById('fearScore').textContent = emotionScores.fear.toFixed(1);
+      document.getElementById('disgustScore').textContent = emotionScores.disgust.toFixed(1);
+      document.getElementById('surpriseScore').textContent = emotionScores.surprise.toFixed(1);
+      
+      // スコアの色分け
+      Object.keys(emotionScores).forEach(emotion => {
+        const element = document.getElementById(`${emotion}Score`);
+        const score = emotionScores[emotion];
+        element.className = 'emotion-score';
+        if (score > 0.3) {
+          element.classList.add('positive');
+        } else if (score < -0.3) {
+          element.classList.add('negative');
+        } else {
+          element.classList.add('neutral');
+        }
+      });
+    }
+
+    // ===== FAQ検索 =====
+    function searchFAQ(text) {
+      const matchedFAQs = [];
+      
+      faqDatabase.forEach(faq => {
+        const matched = faq.keywords.some(keyword => text.includes(keyword));
+        if (matched) {
+          matchedFAQs.push(faq);
+        }
+      });
+      
+      if (matchedFAQs.length > 0) {
+        displayFAQs(matchedFAQs.slice(0, 3)); // 上位3件
+      }
+    }
+
+    // ===== FAQ表示 =====
+    function displayFAQs(faqs) {
+      if (faqs.length === 0) {
+        elements.faqList.innerHTML = '<div class="no-data">キーワードが検出されると、関連するFAQが表示されます</div>';
+        return;
+      }
+      
+      elements.faqList.innerHTML = faqs.map(faq => `
+        <div class="faq-item" onclick="copyFAQAnswer('${faq.answer.replace(/'/g, "\\'")}')">
+          <div class="faq-question">${faq.question}</div>
+          <div class="faq-answer">${faq.answer}</div>
+        </div>
+      `).join('');
+    }
+
+    // ===== FAQ回答コピー =====
+    function copyFAQAnswer(answer) {
+      navigator.clipboard.writeText(answer).then(() => {
+        addAlert('info', 'FAQ回答をコピーしました');
+      });
+    }
+
+    // ===== NGワードチェック =====
+    function checkNGWords(text) {
+      ngWords.forEach(word => {
+        if (text.includes(word)) {
+          addAlert('danger', `NGワード検出: 「${word}」`);
+        }
+      });
+    }
+
+    // ===== コールリーズン推定 =====
+    function estimateCallReason(text) {
+      let matchedCategory = 'その他';
+      const matchedKeywords = new Set();
+      
+      for (const [category, keywords] of Object.entries(callReasonCategories)) {
+        keywords.forEach(keyword => {
+          if (text.includes(keyword)) {
+            matchedCategory = category;
+            matchedKeywords.add(keyword);
+          }
+        });
+      }
+      
+      elements.reasonCategory.textContent = `カテゴリ: ${matchedCategory}`;
+      
+      if (matchedKeywords.size > 0) {
+        elements.reasonTags.innerHTML = Array.from(matchedKeywords).map(keyword => `
+          <div class="reason-tag">
+            <i class="fas fa-tag"></i>
+            ${keyword}
+          </div>
+        `).join('');
+      }
+    }
+
+    // ===== 沈黙チェック =====
+    function checkSilence() {
+      if (!isRecording) return;
+      
+      const now = Date.now();
+      const silenceDuration = (now - lastSpeechTime) / 1000;
+      
+      if (silenceDuration > 30) {
+        addAlert('warning', '30秒以上沈黙が続いています');
+        lastSpeechTime = now; // アラートを繰り返さない
+      }
+      
+      silenceTimer = setTimeout(checkSilence, 5000);
+    }
+
+    // ===== 通話時間チェック =====
+    function checkCallDuration() {
+      if (!isRecording) return;
+      
+      callDuration = Math.floor((Date.now() - startTime) / 1000);
+      
+      if (callDuration > 600) { // 10分
+        addAlert('warning', '通話時間が10分を超過しています');
+      }
+      
+      setTimeout(checkCallDuration, 60000); // 1分ごとにチェック
+    }
+
+    // ===== アラート追加 =====
+    function addAlert(type, message) {
+      const alertHtml = `
+        <div class="alert-item ${type}">
+          <div class="alert-icon">
+            <i class="fas ${type === 'danger' ? 'fa-exclamation-circle' : type === 'warning' ? 'fa-exclamation-triangle' : 'fa-info-circle'}"></i>
+          </div>
+          <div class="alert-text">${message}</div>
+        </div>
+      `;
+      
+      if (elements.alertList.querySelector('.no-data')) {
+        elements.alertList.innerHTML = '';
+      }
+      
+      elements.alertList.insertAdjacentHTML('afterbegin', alertHtml);
+      
+      // 最新5件のみ保持
+      const alerts = elements.alertList.querySelectorAll('.alert-item');
+      if (alerts.length > 5) {
+        alerts[alerts.length - 1].remove();
+      }
+    }
+
+    // ===== ステータス更新 =====
+    function updateStatus(title, text, type) {
+      elements.statusTitle.textContent = title;
+      elements.statusText.textContent = text;
+      
+      const iconMap = {
+        ready: 'fa-circle-notch',
+        running: 'fa-spinner',
+        success: 'fa-check-circle',
+        error: 'fa-exclamation-circle'
+      };
+      
+      elements.statusIcon.querySelector('i').className = `fas ${iconMap[type]}`;
+    }
+
+    // ===== 認識開始 =====
+    function handleRecognitionStart() {
+      console.log('音声認識開始');
+    }
+
+    // ===== 認識エラー =====
+    function handleRecognitionError(event) {
+      console.error('音声認識エラー:', event.error);
+      
+      if (event.error === 'no-speech') {
+        addAlert('warning', '音声が検出されませんでした');
+      } else if (event.error === 'audio-capture') {
+        addAlert('danger', 'マイクにアクセスできません');
+      } else {
+        addAlert('danger', `エラーが発生しました: ${event.error}`);
+      }
+    }
+
+    // ===== 認識終了 =====
+    function handleRecognitionEnd() {
+      console.log('音声認識終了');
+      
+      if (isRecording) {
+        // 自動的に再開
+        try {
+          recognition.start();
+        } catch (error) {
+          console.error('再開エラー:', error);
+        }
+      }
+    }
+
+    // ===== クリア =====
+    function clearAll() {
+      if (confirm('全てのデータをクリアしますか？')) {
+        clearTranscript();
+        emotionScores = { joy: 0, sadness: 0, anger: 0, fear: 0, disgust: 0, surprise: 0 };
+        updateEmotionDisplay();
+        elements.faqList.innerHTML = '<div class="no-data">キーワードが検出されると、関連するFAQが表示されます</div>';
+        elements.alertList.innerHTML = '<div class="no-data">アラートはありません</div>';
+        elements.reasonTags.innerHTML = '<div class="no-data">通話中にキーワードが検出されます</div>';
+        elements.reasonCategory.textContent = 'カテゴリ: 未分類';
+        addAlert('info', 'データをクリアしました');
+      }
+    }
+
+    // ===== 文字起こしクリア =====
+    function clearTranscript() {
+      transcriptText = '';
+      elements.transcript.value = '';
+    }
+
+    // ===== 文字起こしコピー =====
+    function copyTranscript() {
+      const text = elements.transcript.value;
+      if (!text) {
+        addAlert('warning', 'コピーするテキストがありません');
+        return;
+      }
+      
+      navigator.clipboard.writeText(text).then(() => {
+        addAlert('info', '文字起こしをコピーしました');
+      }).catch(err => {
+        console.error('コピー失敗:', err);
+        addAlert('danger', 'コピーに失敗しました');
+      });
+    }
+
+    // ===== セッション保存 =====
+    function saveSession() {
+      const operatorName = elements.operatorName.value || '未設定';
+      const timestamp = new Date().toLocaleString('ja-JP');
+      
+      const sessionData = {
+        operator: operatorName,
+        timestamp: timestamp,
+        transcript: transcriptText,
+        emotions: emotionScores,
+        duration: callDuration
+      };
+      
+      // LocalStorageに保存
+      const sessions = JSON.parse(localStorage.getItem('callSessions') || '[]');
+      sessions.push(sessionData);
+      localStorage.setItem('callSessions', JSON.stringify(sessions));
+      
+      addAlert('info', 'セッションを保存しました');
+      
+      // ダウンロード
+      const blob = new Blob([JSON.stringify(sessionData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `call_session_${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ===== ページ読み込み時に初期化 =====
+    window.addEventListener('DOMContentLoaded', init);
+  </script>
 </body>
 </html>
